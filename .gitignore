@@ -1,0 +1,4 @@
+/postgres-monitor
+/bin/
+*.exe
+.DS_Store
