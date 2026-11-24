@@ -128,11 +128,13 @@ package has no terminal UI dependencies, and no view package imports
 ## Access and query behavior
 
 The app reads `kubectl config current-context`, uses `kubectl get` to discover
-and monitor resources, and uses `kubectl exec` for PostgreSQL reads. The
-SQL is fixed in the program and runs inside `BEGIN READ ONLY` with a 3 second
-statement timeout. It reads CloudNativePG cluster status, pods, PVCs, backups,
-scheduled backups, events, and PostgreSQL replication, archiver, WAL, and
-activity statistics. The app does not expose shell or SQL input.
+and monitor resources, and uses `kubectl exec` for PostgreSQL reads. Exec
+access on instance pods (already required for SQL on the primary) is also used
+on a starting replica. The SQL is fixed in the program and runs inside
+`BEGIN READ ONLY` with a 3 second statement timeout. It reads CloudNativePG
+cluster status, pods, PVCs, backups, scheduled backups, events, and PostgreSQL
+replication, archiver, WAL, and activity statistics. The app does not expose
+shell or SQL input.
 
 Backup actions use `kubectl create -f -` for one `Backup` resource and
 `kubectl delete backups.postgresql.cnpg.io <name>` for removal, always in the
@@ -157,7 +159,19 @@ provisioned capacity; this first version does not collect filesystem usage.
 Replica initialization progress comes from the primary's
 `pg_stat_progress_basebackup` view. Copy speed is the byte difference between
 two successful samples from the same process divided by elapsed time; it appears
-after the second sample and resets when the join process changes.
+after the second sample and resets when the join process changes. After the base
+copy, while the new instance replays WAL from the archive before its first
+consistent recovery state, the primary cannot observe it. Through read-only
+`kubectl exec`, the monitor samples the starting replica every five seconds:
+the control file's minimum recovery ending location is the live flush cursor,
+anchored by the restartpoint location, and the backup manifest fixes the
+consistency target (the backup end). `pg_wal` is not used: CNPG's parallel
+restore keeps prefetched segments there ahead of replay, so its newest file
+would badly overstate progress. The dashboard shows the live position,
+remaining bytes, a measured rate, and an ETA derived from it. The rate is
+carried across container restarts and dropped after about 20 minutes without
+movement. If the live cursor has not moved for over five minutes, the summary
+says so, distinguishing a stalled archive fetch from slow replay.
 
 Optional statement statistics are read only from an existing `pg_stat_statements`
 view in the `postgres` database. Missing extensions or permissions are reported;

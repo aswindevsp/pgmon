@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"postgres-monitor/internal/monitor"
 )
 
 func TestViewportBounds(t *testing.T) {
@@ -58,6 +59,32 @@ func TestTickStartsSQLWhileKubeCollectRuns(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected SQL collect and next tick")
+	}
+}
+
+func TestTickStartsReplayCollectAndAppliesLiveCursor(t *testing.T) {
+	m := fixture(t, 1)
+	m.data.ReplayProgress = map[string]monitor.WALReplayProgress{"postgres-2": {Pod: "postgres-2"}}
+	updated, _ := m.Update(tickMsg(time.Now()))
+	m = updated.(model)
+	if !m.replayBusy || !m.busy {
+		t.Fatal("tick must start the live archive-replay collect")
+	}
+	// A second tick while the collect is running must not start another.
+	updated, _ = m.Update(tickMsg(time.Now()))
+	if !updated.(model).replayBusy {
+		t.Fatal("in-flight replay collect must be exclusive")
+	}
+	live := uint64(1) << 20
+	next := m.data
+	next.ReplayProgress = map[string]monitor.WALReplayProgress{"postgres-2": {Pod: "postgres-2", Live: live}}
+	updated, _ = m.Update(refreshMsg{data: next, replay: true})
+	m = updated.(model)
+	if m.replayBusy {
+		t.Fatal("replay collect must clear its busy flag")
+	}
+	if got := m.data.ReplayProgress["postgres-2"].Live; got != live {
+		t.Fatalf("replay apply dropped the live cursor sample: %d", got)
 	}
 }
 

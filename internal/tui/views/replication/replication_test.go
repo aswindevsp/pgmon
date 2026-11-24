@@ -71,6 +71,89 @@ func TestReplicationTrendWaitsForHistory(t *testing.T) {
 	}
 }
 
+func TestReplicationDashboardShowsArchiveReplay(t *testing.T) {
+	ctx := replicationFixture()
+	ctx.Data.ReplayProgress = map[string]monitor.WALReplayProgress{
+		"orders-db-3": {
+			Pod: "orders-db-3", State: "in archive recovery", Timeline: 4,
+			Position: 512 << 10, Start: 256 << 10, Target: 1024 << 10,
+			Restarts: 1, RateBytesPerSec: 55.3 * 1024 * 1024, HasRate: true,
+		},
+	}
+	view := ansi.Strip(Render(ctx, 140))
+	for _, want := range []string{"Replica WAL catch-up", "orders-db-3", "at 0/00080000", "~512.0 KiB to consistency", "55.3 MiB/s", "ETA ≈<1s", "1 restarts", "control file", "~33.3%"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("dashboard missing %q:\n%s", want, view)
+		}
+	}
+	// While replaying, the meter keeps its empty end and stays under 100%.
+	meter := false
+	for _, line := range replayProgressLines(ctx, 140) {
+		if strings.Contains(line, "█") && strings.Contains(line, "░") && strings.Contains(line, "~33.3%") {
+			meter = true
+		}
+	}
+	if !meter {
+		t.Fatal("missing in-progress replay meter with percentage")
+	}
+	footnote := strings.Join(replayProgressLines(ctx, 140), "\n")
+	for _, want := range []string{"control file every display tick", "minimum recovery point", "first consistent state", "backup end", "20 minutes"} {
+		if !strings.Contains(footnote, want) {
+			t.Errorf("footnote missing %q:\n%s", want, footnote)
+		}
+	}
+	bar := false
+	for _, line := range replayProgressLines(ctx, 140) {
+		if strings.Contains(line, "█") {
+			bar = true
+		}
+	}
+	if !bar {
+		t.Fatal("missing replay progress meter")
+	}
+	// The fixed manifest target is usable even when the primary's SQL is stale.
+	ctx.SQLLive = false
+	view = ansi.Strip(Render(ctx, 140))
+	for _, want := range []string{"Replica WAL catch-up", "orders-db-3", "~512.0 KiB to consistency"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("stale dashboard missing %q:\n%s", want, view)
+		}
+	}
+	// A timeline mismatch makes the fixed target unusable.
+	ctx.SQLLive = true
+	ctx.Data.ReplayProgress["orders-db-3"] = monitor.WALReplayProgress{
+		Pod: "orders-db-3", Timeline: 5, Position: 512 << 10, Target: 1024 << 10, HasRate: true,
+	}
+	view = ansi.Strip(Render(ctx, 140))
+	if !strings.Contains(view, "replaying WAL from archive") || strings.Contains(view, "512.0 KiB to consistency") {
+		t.Fatalf("timeline mismatch should hide the consistency estimate:\n%s", view)
+	}
+	// Reaching the backup end fills the meter and labels it explicitly.
+	ctx.Data.ReplayProgress["orders-db-3"] = monitor.WALReplayProgress{
+		Pod: "orders-db-3", State: "in archive recovery", Timeline: 4,
+		Position: 1024 << 10, Live: 1024 << 10, Start: 256 << 10, Target: 1024 << 10,
+		Restarts: 1, RateBytesPerSec: 55.3 * 1024 * 1024, HasRate: true,
+	}
+	view = ansi.Strip(Render(ctx, 140))
+	if !strings.Contains(view, "100% · backup end reached") {
+		t.Fatalf("reached target should be labeled:\n%s", view)
+	}
+	if !strings.Contains(view, "~0.0 B to consistency") {
+		t.Fatalf("reached target should report no remaining bytes:\n%s", view)
+	}
+	// A live-cursor sample older than five minutes flags a stalled archive fetch.
+	ctx.Data.ReplayProgress["orders-db-3"] = monitor.WALReplayProgress{
+		Pod: "orders-db-3", State: "in archive recovery", Timeline: 4,
+		Position: 512 << 10, Live: 512 << 10, LiveAt: time.Now().Add(-6 * time.Minute),
+		Start: 256 << 10, Target: 1024 << 10, Restarts: 1,
+		RateBytesPerSec: 55.3 * 1024 * 1024, HasRate: true,
+	}
+	view = ansi.Strip(Render(ctx, 140))
+	if !strings.Contains(view, "no WAL restored for") {
+		t.Fatalf("idle live cursor should be visible in the panel:\n%s", view)
+	}
+}
+
 func TestReplicationDashboardShowsReplicaBaseCopy(t *testing.T) {
 	ctx := replicationFixture()
 	ctx.Data.Cluster.Metadata.Name = "orders-db"

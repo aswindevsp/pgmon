@@ -189,6 +189,9 @@ func replicaFlow(ctx shared.Context, name string) walFlow {
 			return walFlow{style: shared.Amber, dashed: true, label: "joining", detail: shared.ReplicaJoinCompact(join)}
 		}
 	}
+	if p, ok := ctx.Data.ReplayProgress[name]; ok {
+		return walFlow{style: shared.Amber, dashed: true, label: "catching up", detail: shared.WALReplayCompact(ctx, p)}
+	}
 	return walFlow{style: shared.Red, dashed: true, broken: true, label: "BROKEN", detail: "no sender"}
 }
 
@@ -462,7 +465,12 @@ func podDetails(ctx shared.Context) []string {
 	} else if n.Primary && ctx.SQLLive {
 		lines = append(lines, fmt.Sprintf("PostgreSQL %s · %d connected WAL senders", ctx.Data.Sql.Version, len(ctx.Data.Sql.Replication)))
 	} else if !n.Primary {
-		lines = append(lines, shared.Muted.Render("No current replication measurement for this pod."))
+		if p, ok := ctx.Data.ReplayProgress[n.Name]; ok {
+			lines = append(lines, "WAL replay  "+shared.WALReplaySummary(ctx, p),
+				shared.Muted.Render("Live position is the instance's control-file recovery position, read read-only; the primary cannot observe this phase."))
+		} else {
+			lines = append(lines, shared.Muted.Render("No current replication measurement for this pod."))
+		}
 	}
 	lines = append(lines, nodeStorage(ctx, n))
 	return lines

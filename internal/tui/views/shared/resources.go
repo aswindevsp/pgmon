@@ -36,6 +36,9 @@ func InstanceSignal(ctx Context, n Node) string {
 			return Amber.Render(ReplicaJoinCompact(join))
 		}
 	}
+	if p, ok := ctx.Data.ReplayProgress[n.Name]; ok {
+		return Amber.Render(WALReplayCompact(ctx, p))
+	}
 	if ctx.SQLLive {
 		return Amber.Render("! No matching WAL sender")
 	}

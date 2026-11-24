@@ -78,8 +78,9 @@ type PodResource struct {
 	Status struct {
 		Phase             string `json:"phase"`
 		ContainerStatuses []struct {
-			Ready        bool `json:"ready"`
-			RestartCount int  `json:"restartCount"`
+			Name         string `json:"name"`
+			Ready        bool   `json:"ready"`
+			RestartCount int    `json:"restartCount"`
 		} `json:"containerStatuses"`
 	} `json:"status"`
 }

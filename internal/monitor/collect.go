@@ -116,6 +116,8 @@ func CollectKube(cfg Config, s *Snapshot) {
 		s.NodeUsageHistory = usage.NodeUsageHistory
 	}
 	s.MetricsErr = usage.MetricsErr
+	// Archive replay progress has its own five-second collector in the TUI
+	// loop; it needs no data from this cycle.
 	if len(succeeded) == len(tasks) {
 		s.KubeAt = time.Now()
 	}

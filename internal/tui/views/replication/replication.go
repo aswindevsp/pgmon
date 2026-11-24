@@ -20,6 +20,9 @@ func Render(ctx shared.Context, width int) string {
 	if joins := monitor.ReplicaJoins(ctx.Data, ctx.SQLLive); len(joins) > 0 {
 		parts = append(parts, shared.DashboardPanel("Replica initialization · physical base copy", replicaJoinLines(joins, width), width))
 	}
+	if len(ctx.Data.ReplayProgress) > 0 {
+		parts = append(parts, shared.DashboardPanel("Replica WAL catch-up · archive replay", replayProgressLines(ctx, width), width))
+	}
 	parts = append(parts, shared.DashboardPair("Replay backlog · recent samples", trend, "Replication slots", slots, width))
 	return shared.StackDashboards(parts...)
 }
@@ -35,6 +38,37 @@ func replicaJoinLines(joins []monitor.ReplicaJoin, width int) []string {
 		}
 	}
 	lines = append(lines, shared.Muted.Render("Copy speed is averaged between SQL samples; total bytes are estimated. The replica then starts and catches up on WAL."))
+	return lines
+}
+
+func replayProgressLines(ctx shared.Context, width int) []string {
+	entries := make([]monitor.WALReplayProgress, 0, len(ctx.Data.ReplayProgress))
+	for _, p := range ctx.Data.ReplayProgress {
+		entries = append(entries, p)
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Pod < entries[j].Pod })
+	lines := make([]string, 0, 2*len(entries)+1)
+	for _, p := range entries {
+		lines = append(lines, shared.Bright.Bold(true).Render(p.Pod)+"  "+shared.WALReplaySummary(ctx, p))
+		if p.Start > 0 && p.Target > 0 && p.Target > p.Start {
+			live := shared.WALReplayLivePosition(p)
+			fraction := (float64(live) - float64(p.Start)) / float64(p.Target-p.Start)
+			fraction = math.Min(1, math.Max(0, fraction))
+			barWidth := max(8, min(32, width-8))
+			if live >= p.Target {
+				lines = append(lines, "  "+shared.Meter(1, barWidth)+"  "+shared.Green.Render("100% · backup end reached"))
+				continue
+			}
+			// While replaying, the bar always keeps an empty end cell and the
+			// percentage stays below 100: only the reached target fills it.
+			barFraction := math.Min(fraction, float64(barWidth-1)/float64(barWidth))
+			lines = append(lines, "  "+shared.Meter(barFraction, barWidth)+fmt.Sprintf("  ~%.1f%%", math.Min(99.9, fraction*100)))
+		}
+	}
+	lines = append(lines,
+		shared.Muted.Render("Sampled from the control file every display tick; live cursor: the minimum recovery point."),
+		shared.Muted.Render("The first consistent state requires replaying past the backup end."),
+		shared.Muted.Render("Rate carries across container restarts for up to 20 minutes."))
 	return lines
 }
 

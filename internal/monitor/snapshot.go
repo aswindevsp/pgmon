@@ -82,6 +82,7 @@ type Snapshot struct {
 	TxRate                float64
 	TxHistory             []float64
 	ReplicationLagHistory map[string][]float64
+	ReplayProgress        map[string]WALReplayProgress
 	BaseBackupRates       map[string]float64
 	PodUsage              map[string]ResourceUsage
 	NodeUsage             map[string]ResourceUsage
@@ -89,6 +90,26 @@ type Snapshot struct {
 	NodeUsageHistory      map[string]UsageHistory
 	NodeCaps              map[string]ResourceCap
 	MetricsErr            string
+}
+
+// WALReplayProgress tracks a starting replica's archive WAL replay, measured
+// read-only from its control file and backup manifest before the instance
+// accepts SQL connections.
+type WALReplayProgress struct {
+	Pod             string
+	State           string    // pg_controldata cluster state, e.g. "in archive recovery"
+	Timeline        int       // latest checkpoint TimeLineID
+	Position        uint64    // latest restartpoint location, bytes
+	Live            uint64    // control-file minimum recovery ending location, bytes; 0 when unknown
+	LiveAt          time.Time // when the live cursor was sampled
+	SegmentSize     uint64    // bytes per WAL segment from the control file; 0 when unparsed
+	Start           uint64    // backup_manifest Start-LSN, bytes; 0 when unknown
+	Target          uint64    // backup_manifest End-LSN, bytes; 0 when unknown
+	Restarts        int32
+	At              time.Time // control-file sample time
+	LastAdvance     time.Time // when the live cursor last moved
+	RateBytesPerSec float64
+	HasRate         bool
 }
 
 // UsageHistory is recent CPU and memory samples for one pod or node.

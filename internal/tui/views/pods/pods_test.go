@@ -76,6 +76,31 @@ func TestTopologyDoesNotHideUnreadyOrStaleData(t *testing.T) {
 	}
 }
 
+func TestArchiveReplayReplacesBrokenSender(t *testing.T) {
+	ctx := fixture(t, 1)
+	ctx.Data.Sql.Replication = nil
+	ctx.Data.Sql.CurrentWALLSN = "0/100000"
+	ctx.Data.Sql.TimelineID = 4
+	ctx.Data.ReplayProgress = map[string]monitor.WALReplayProgress{
+		"postgres-2": {
+			Pod: "postgres-2", State: "in archive recovery", Timeline: 4,
+			Position: 512 << 10, Start: 256 << 10, Target: 1024 << 10,
+			Restarts: 1, RateBytesPerSec: 1024 * 1024, HasRate: true,
+		},
+	}
+	graph := Topology(ctx, 118)
+	if !strings.Contains(graph, "catching up") || strings.Contains(graph, "BROKEN") {
+		t.Fatalf("archive replay should not look broken:\n%s", graph)
+	}
+	ctx.SelectedPod = "postgres-2"
+	details := Render(ctx, 140)
+	for _, want := range []string{"WAL replay", "replaying WAL from archive", "at 0/00080000", "~512.0 KiB to consistency", "1.0 MiB/s", "ETA ≈<1s", "control-file recovery position"} {
+		if !strings.Contains(details, want) {
+			t.Errorf("pod details missing %q:\n%s", want, details)
+		}
+	}
+}
+
 func TestTopologyMarksBrokenWALFlow(t *testing.T) {
 	ctx := fixture(t, 2)
 	ctx.Data.Sql.Replication[0].State = "stopped"

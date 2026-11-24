@@ -20,6 +20,7 @@ type model struct {
 	busy              bool
 	sqlBusy           bool
 	kubeBusy          bool
+	replayBusy        bool
 	width, height     int
 	focus             int
 	selectedPod       string
@@ -45,6 +46,7 @@ type refreshMsg struct {
 	data      monitor.Snapshot
 	err       error
 	Sql, kube bool
+	replay    bool
 }
 type tickMsg time.Time
 
@@ -66,8 +68,19 @@ func (m model) startCollects(Sql, kube bool) (model, tea.Cmd) {
 		m.kubeBusy = true
 		cmds = append(cmds, collectKubeCmd(m.cfg, m.data))
 	}
-	m.busy = m.sqlBusy || m.kubeBusy
+	m.busy = m.sqlBusy || m.kubeBusy || m.replayBusy
 	return m, tea.Batch(cmds...)
+}
+
+// withReplayCollect starts the live archive-replay probe beside other
+// collects. With no replaying replica it only recomputes an empty map.
+func (m model) withReplayCollect(cmd tea.Cmd) (model, tea.Cmd) {
+	if m.replayBusy {
+		return m, cmd
+	}
+	m.replayBusy = true
+	m.busy = m.sqlBusy || m.kubeBusy || m.replayBusy
+	return m, tea.Batch(cmd, collectReplayCmd(m.cfg, m.data))
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -78,6 +91,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tickMsg:
 		m, cmd := m.startCollects(true, !m.started || time.Since(m.data.KubeAt) >= kubeEvery)
+		// Archive replay needs live progress: sample it on every display tick.
+		m, cmd = m.withReplayCollect(cmd)
 		return m, tea.Batch(cmd, tickCmd())
 	case backupCreateResult:
 		m.backupBusy = false
@@ -129,6 +144,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				applyKube(&m.data, msg.data)
 				m = m.reconcileAfterKube()
 			}
+			if msg.replay {
+				m.data.ReplayProgress = msg.data.ReplayProgress
+			}
 			m.applySwitchoverProgress()
 		}
 		if msg.Sql {
@@ -137,7 +155,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.kube {
 			m.kubeBusy = false
 		}
-		m.busy = m.sqlBusy || m.kubeBusy
+		if msg.replay {
+			m.replayBusy = false
+		}
+		m.busy = m.sqlBusy || m.kubeBusy || m.replayBusy
 		m.clampScroll()
 		return m, nil
 	case tea.KeyMsg:
@@ -200,6 +221,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			var cmd tea.Cmd
 			m, cmd = m.startCollects(true, true)
+			m, cmd = m.withReplayCollect(cmd)
 			m.clampScroll()
 			return m, cmd
 		case "tab", "right":
@@ -305,6 +327,15 @@ func collectKubeCmd(cfg monitor.Config, previous monitor.Snapshot) tea.Cmd {
 	}
 }
 
+// collectReplayCmd samples the live archive-replay cursor each display tick.
+func collectReplayCmd(cfg monitor.Config, previous monitor.Snapshot) tea.Cmd {
+	return func() tea.Msg {
+		s := previous
+		monitor.CollectReplayProgress(cfg, &s)
+		return refreshMsg{data: s, replay: true}
+	}
+}
+
 func applySQL(dst *monitor.Snapshot, src monitor.Snapshot) {
 	dst.Cluster = src.Cluster
 	dst.Sql = src.Sql
@@ -328,6 +359,7 @@ func applyKube(dst *monitor.Snapshot, src monitor.Snapshot) {
 	dst.BackupProgress = src.BackupProgress
 	dst.Jobs = src.Jobs
 	dst.RestoreProgress = src.RestoreProgress
+	// ReplayProgress is owned by the per-tick replay collector.
 	dst.Schedules = src.Schedules
 	dst.Events = src.Events
 	dst.PodUsage = src.PodUsage
