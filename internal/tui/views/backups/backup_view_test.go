@@ -80,6 +80,7 @@ func TestBackupHistoryUsesReportedFields(t *testing.T) {
 	older.Metadata.CreationTimestamp = time.Date(2026, 9, 20, 2, 0, 0, 0, time.UTC)
 	older.Status.Phase = "completed"
 	older.Spec.Method = "plugin"
+	older.Status.InstanceID.PodName = "postgres-2"
 	newer := monitor.BackupResource{}
 	newer.Metadata.Name = "newer"
 	newer.Metadata.CreationTimestamp = older.Metadata.CreationTimestamp.Add(time.Hour)
@@ -92,9 +93,16 @@ func TestBackupHistoryUsesReportedFields(t *testing.T) {
 	if !strings.Contains(text, "plugin") || !strings.Contains(text, "failed") || strings.Contains(text, "GB") {
 		t.Fatal("history should only show reported fields:", text)
 	}
+	if !strings.Contains(text, "postgres-2") || !strings.Contains(text, "pod") {
+		t.Fatal("history should name the backup pod:", text)
+	}
+	narrow := strings.Join(backupHistoryLines(ctx, 48), "\n")
+	if !strings.Contains(narrow, "on postgres-2") || !strings.Contains(narrow, "pod not assigned") {
+		t.Fatal("narrow history should state the pod or that it is unassigned:", narrow)
+	}
 }
 
-func TestNarrowBackupHistoryKeepsStatusAndAllRows(t *testing.T) {
+func TestNarrowBackupHistoryShowsLatestFive(t *testing.T) {
 	ctx := shared.Context{}
 	for i := 0; i < 12; i++ {
 		b := monitor.BackupResource{}
@@ -108,10 +116,19 @@ func TestNarrowBackupHistoryKeepsStatusAndAllRows(t *testing.T) {
 	s.Spec.Schedule = "0 2 * * *"
 	ctx.Data.Schedules = []monitor.ScheduledBackupResource{s}
 	text := strings.Join(backupHistoryLines(ctx, 48), "\n")
-	if strings.Count(text, "completed") != 12 || !strings.Contains(text, "backup-a") || !strings.Contains(text, "backup-l") {
-		t.Fatal("history should retain status and every backup:", text)
+	if strings.Count(text, "completed") != 5 || !strings.Contains(text, "backup-l") || strings.Contains(text, "backup-a") {
+		t.Fatal("history should keep only the five newest backups:", text)
 	}
-	if !strings.Contains(text, "daily") || !strings.Contains(text, "0 2 * * *") {
-		t.Fatal("schedule should be shown:", text)
+	if !strings.Contains(text, "7 older backups not shown") {
+		t.Fatal("truncated history should say how many are hidden:", text)
+	}
+	if title := backupHistoryTitle(ctx.Data.Backups); title != "Backups · last 5 of 12" {
+		t.Fatalf("title should show the cap, got %q", title)
+	}
+	if strings.Contains(text, "daily") {
+		t.Fatal("schedule should be in its own panel:", text)
+	}
+	if schedule := strings.Join(backupScheduleLines(ctx), "\n"); !strings.Contains(schedule, "daily") || !strings.Contains(schedule, "0 2 * * *") {
+		t.Fatal("schedule should be shown:", schedule)
 	}
 }

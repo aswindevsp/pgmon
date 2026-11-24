@@ -23,7 +23,14 @@ func collect(cfg Config, previous Snapshot, includeKube bool) (Snapshot, error) 
 
 func CollectKube(cfg Config, s *Snapshot) {
 	s.ResourceErr = ""
+	usageDone := make(chan Snapshot, 1)
+	go func() {
+		tmp := Snapshot{PodUsage: s.PodUsage, NodeUsage: s.NodeUsage, PodUsageHistory: s.PodUsageHistory, NodeUsageHistory: s.NodeUsageHistory}
+		collectUsage(cfg, &tmp)
+		usageDone <- tmp
+	}()
 	var Pods ResourceList
+	var Nodes ResourceList
 	var Pvcs ResourceList
 	var Backups ResourceList
 	var Jobs ResourceList
@@ -35,6 +42,7 @@ func CollectKube(cfg Config, s *Snapshot) {
 		args []string
 	}{
 		{"pods", &Pods, []string{"get", "pods", "-l", "cnpg.io/cluster=" + cfg.Cluster, "-o", "json"}},
+		{"nodes", &Nodes, []string{"get", "nodes", "-o", "json"}},
 		{"PVCs", &Pvcs, []string{"get", "persistentvolumeclaims", "-l", "cnpg.io/cluster=" + cfg.Cluster, "-o", "json"}},
 		{"backups", &Backups, []string{"get", "backups.postgresql.cnpg.io", "-o", "json"}},
 		{"jobs", &Jobs, []string{"get", "jobs", "-l", "cnpg.io/cluster=" + cfg.Cluster, "-o", "json"}},
@@ -62,6 +70,11 @@ func CollectKube(cfg Config, s *Snapshot) {
 	if succeeded["pods"] {
 		s.Pods = nil
 		decodeItems(Pods.Items, &s.Pods)
+	}
+	if succeeded["nodes"] {
+		var nodes []NodeResource
+		decodeItems(Nodes.Items, &nodes)
+		s.NodeCaps = nodeCapsByName(nodes)
 	}
 	if succeeded["PVCs"] {
 		s.Pvcs = nil
@@ -93,6 +106,16 @@ func CollectKube(cfg Config, s *Snapshot) {
 		decodeItems(Events.Items, &s.Events)
 		FilterEvents(&s.Events, cfg.Cluster)
 	}
+	usage := <-usageDone
+	if usage.PodUsage != nil {
+		s.PodUsage = usage.PodUsage
+		s.PodUsageHistory = usage.PodUsageHistory
+	}
+	if usage.NodeUsage != nil {
+		s.NodeUsage = usage.NodeUsage
+		s.NodeUsageHistory = usage.NodeUsageHistory
+	}
+	s.MetricsErr = usage.MetricsErr
 	if len(succeeded) == len(tasks) {
 		s.KubeAt = time.Now()
 	}

@@ -100,6 +100,32 @@ func DashboardPair(lt string, left []string, rt string, right []string, width in
 	return lipgloss.JoinHorizontal(lipgloss.Top, DashboardPanel(lt, l, w), "   ", DashboardPanel(rt, r, width-w-3))
 }
 
+// DashboardTriple lays three panels side by side when wide, otherwise stacks
+// them. All three panels share the tallest panel's height so their frames line
+// up; empty rows are drawn with borders, never as fake data.
+func DashboardTriple(t1 string, l1 []string, t2 string, l2 []string, t3 string, l3 []string, width int) string {
+	if width < 110 {
+		return StackDashboards(DashboardPanel(t1, l1, width), DashboardPanel(t2, l2, width), DashboardPanel(t3, l3, width))
+	}
+	height := max(len(l1), max(len(l2), len(l3)))
+	pad := func(l []string) []string {
+		out := append([]string(nil), l...)
+		for len(out) < height {
+			out = append(out, "")
+		}
+		return out
+	}
+	const gap = 3
+	avail := width - 2*gap
+	w1 := avail / 3
+	w2 := avail / 3
+	w3 := avail - w1 - w2
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		DashboardPanel(t1, pad(l1), w1), strings.Repeat(" ", gap),
+		DashboardPanel(t2, pad(l2), w2), strings.Repeat(" ", gap),
+		DashboardPanel(t3, pad(l3), w3))
+}
+
 // AlignedEnds places left and right text at the ends of a width.
 func AlignedEnds(left, right string, width int) string {
 	right = FitLine(right, max(0, width/2))
@@ -109,8 +135,38 @@ func AlignedEnds(left, right string, width int) string {
 
 // Meter renders a filled proportion using block characters.
 func Meter(fraction float64, width int) string {
-	filled := min(width, max(0, int(fraction*float64(width))))
-	return Green.Render(strings.Repeat("█", filled)) + Muted.Render(strings.Repeat("░", width-filled))
+	return usageMeter(fraction, width, Green)
+}
+
+// UsageMeter renders usage against a limit. Color shifts as the bar fills.
+func UsageMeter(fraction float64, width int) string {
+	style := Green
+	if fraction >= 0.9 {
+		style = Red
+	} else if fraction >= 0.7 {
+		style = Amber
+	}
+	return usageMeter(fraction, width, style)
+}
+
+// ColoredMeter renders a meter with an explicit fill style, for gauges where
+// higher values are better (cache hit) or worse (resource usage).
+func ColoredMeter(fraction float64, width int, fill lipgloss.Style) string {
+	return usageMeter(fraction, width, fill)
+}
+
+func usageMeter(fraction float64, width int, fill lipgloss.Style) string {
+	if width <= 0 {
+		return ""
+	}
+	if fraction < 0 {
+		fraction = 0
+	}
+	filled := min(width, max(0, int(fraction*float64(width)+0.5)))
+	if fraction > 0 && filled == 0 {
+		filled = 1
+	}
+	return fill.Render(strings.Repeat("█", filled)) + Muted.Render(strings.Repeat("░", width-filled))
 }
 
 // FitLine truncates a styled string to width without breaking escape sequences.

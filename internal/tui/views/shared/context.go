@@ -24,6 +24,23 @@ type Context struct {
 	Row          int
 	RefreshEvery time.Duration
 	KubeEvery    time.Duration
+	// Action state. Views render only; all writes stay in internal/tui.
+	KubeContext              string
+	Namespace                string
+	Cluster                  string
+	BackupSelected           string
+	BackupNotice             string
+	BackupBusy               bool
+	BackupConfirmKind        string
+	BackupConfirmName        string
+	BackupConfirmMeth        string
+	BackupConfirmPlug        string
+	BackupConfirmPhase       string
+	SwitchoverNotice         string
+	SwitchoverBusy           bool
+	SwitchoverPending        string
+	SwitchoverConfirmPrimary string
+	SwitchoverConfirmTarget  string
 }
 
 // Node is a topology entry: the primary or a pod that should appear as a replica.

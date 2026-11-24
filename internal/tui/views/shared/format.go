@@ -136,14 +136,26 @@ func BytesHumanU(n uint64) string {
 
 // Spark renders a sparkline for a numeric series.
 func Spark(v []float64) string {
+	return spark(v, 1)
+}
+
+// SparkRange renders a sparkline scaled to the series itself, including values below 1.
+func SparkRange(v []float64) string {
+	return spark(v, 0)
+}
+
+func spark(v []float64, floor float64) string {
 	if len(v) == 0 {
 		return Muted.Render("collecting trend…")
 	}
-	maxV := float64(1)
+	maxV := floor
 	for _, x := range v {
 		if x > maxV {
 			maxV = x
 		}
+	}
+	if maxV == 0 {
+		return Cyan.Render(strings.Repeat("▁", len(v)))
 	}
 	bars := "▁▂▃▄▅▆▇█"
 	var b strings.Builder

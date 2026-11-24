@@ -35,3 +35,25 @@ func fixture(t *testing.T, replicas int) model {
 	}
 	return m
 }
+
+func fixtureForBackup(t *testing.T) model {
+	t.Helper()
+	m := fixture(t, 1)
+	m.focus = 2
+	_ = json.Unmarshal([]byte(`{"spec":{"backup":{"barmanObjectStore":{"destinationPath":"s3://b/"}}}}`), &m.data.Cluster)
+	mk := func(name, phase string, hour int, uid string) monitor.BackupResource {
+		var b monitor.BackupResource
+		raw := fmt.Sprintf(`{"metadata":{"name":%q,"uid":%q,"creationTimestamp":"2026-09-20T%02d:00:00Z"},"spec":{"cluster":{"name":"postgres"},"method":"barmanObjectStore"},"status":{"phase":%q}}`, name, uid, hour, phase)
+		if err := json.Unmarshal([]byte(raw), &b); err != nil {
+			t.Fatal(err)
+		}
+		return b
+	}
+	m.data.Backups = []monitor.BackupResource{
+		mk("older", "completed", 2, "uid-older"),
+		mk("newer", "failed", 3, "uid-newer"),
+		mk("run-1", "running", 4, "uid-run-1"),
+	}
+	m.backupSel = "newer"
+	return m
+}

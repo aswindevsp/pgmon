@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"postgres-monitor/internal/tui/views/pods"
 	"postgres-monitor/internal/tui/views/shared"
 )
@@ -18,6 +20,26 @@ func (m model) viewportSize() (int, int, int) {
 		margin = 2
 	}
 	return w - 2*margin, max(1, h-9), margin
+}
+
+// showBackupSelection keeps the selected history row in view as arrow keys
+// move through backup resources. The action panel follows that list.
+func (m *model) showBackupSelection() {
+	if m.backupSel == "" {
+		return
+	}
+	width, height, _ := m.viewportSize()
+	for i, line := range m.bodyLines(width) {
+		if !strings.Contains(line, "› ") {
+			continue
+		}
+		if i < m.scroll {
+			m.scroll = max(0, i-1)
+		} else if i >= m.scroll+height {
+			m.scroll = i - height + 1
+		}
+		return
+	}
 }
 
 // movePod selects the next or previous pod and scrolls the topology into view.

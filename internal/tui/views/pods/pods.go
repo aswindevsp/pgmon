@@ -9,16 +9,24 @@ import (
 	"postgres-monitor/internal/tui/views/shared"
 )
 
-// Every box has the same height so the branches meet the center of each node.
-const NodeHeight = 7
+// Every box has the same height so pyramid links meet each node cleanly.
+const NodeHeight = 6
+const minPyramidBox = 34
+const pyramidGap = 2
 
 // Render draws the Pods tab: pod list, selected pod details, and storage.
 func Render(ctx shared.Context, width int) string {
-	return shared.StackDashboards(
-		shared.DashboardPanel("Pods · j/k select", podListLines(ctx), width),
+	sections := []string{
+		shared.DashboardPanel("Pods · j/k select · p switchover", podListLines(ctx), width),
 		shared.DashboardPanel("Selected pod", podDetails(ctx), width),
-		shared.DashboardPanel("Provisioned storage", storageLines(ctx), width),
-	)
+		shared.DashboardPanel("Switchover", shared.SwitchoverActionLines(ctx, width), width),
+	}
+	if ctx.SwitchoverConfirmTarget != "" {
+		title, lines := shared.SwitchoverConfirmPanel(ctx)
+		sections = append(sections, shared.DashboardPanel(title, lines, width))
+	}
+	sections = append(sections, shared.DashboardPanel("Provisioned storage", storageLines(ctx), width))
+	return shared.StackDashboards(sections...)
 }
 
 func podListLines(ctx shared.Context) []string {
@@ -50,6 +58,7 @@ func storageLines(ctx shared.Context) []string {
 }
 
 func nodeBox(ctx shared.Context, n shared.Node, width int, selected bool) string {
+	inner := max(16, width-4)
 	role, color := "REPLICA", shared.Green
 	if n.Primary && monitor.ClusterRecovering(ctx.Data) && ctx.Data.Cluster.Status.CurrentPrimary == "" {
 		role, color = "RECOVERING", shared.Amber
@@ -58,41 +67,19 @@ func nodeBox(ctx shared.Context, n shared.Node, width int, selected bool) string
 	} else if ctx.Data.Cluster.Status.CurrentPrimary == "" {
 		role, color = "ROLE UNKNOWN", shared.Muted
 	}
-	marker := "  "
+	marker := ""
 	border := lipgloss.Color("#344155")
 	if selected {
 		marker, border = "▸ ", lipgloss.Color("#55D6E8")
 	}
 	status, health := shared.PodHealth(n.Pod)
-	lines := []string{color.Bold(true).Render(marker+role+"  ") + shared.Bright.Bold(true).Render(n.Name), health.Render(status)}
-	if n.Primary {
-		if ctx.SQLLive && ctx.Data.Sql.WAL != nil {
-			lines = append(lines, shared.Cyan.Render("WAL "+shared.Rate(ctx.Data.WalRate))+shared.Muted.Render("  → replicas"))
-		} else {
-			lines = append(lines, shared.Muted.Render("WAL rate unavailable"))
-		}
-	} else if r := ctx.Replication(n.Name); r != nil {
-		state := shared.Green.Render(r.State)
-		if r.State != "streaming" {
-			state = shared.Amber.Render(r.State)
-		}
-		lines = append(lines, state+shared.Muted.Render(" · "+r.SyncState+" · lag "+shared.ReplayLag(r)))
-	} else if ctx.SQLLive {
-		lines = append(lines, shared.Amber.Render("! No matching WAL sender"))
-	} else {
-		lines = append(lines, shared.Muted.Render("? Replication unavailable"))
-	}
-	if n.Pod != nil {
-		lines = append(lines, shared.Muted.Render(fmt.Sprintf("%d restarts · %s", shared.Restarts(n.Pod), shared.ValueOr(n.Pod.Spec.NodeName, "node pending"))))
-	} else {
-		lines = append(lines, shared.Muted.Render("Waiting for Kubernetes pod data"))
-	}
-	lines = append(lines, nodeStorage(ctx, n))
+	title := color.Bold(true).Render(marker+role+"  ") + shared.Bright.Bold(true).Render(n.Name)
+	lines := []string{shared.AlignedEnds(title, health.Render(status), inner), shared.AlignedEnds(shared.Muted.Render(shared.NodeName(n)), shared.InstanceSignal(ctx, n), inner)}
+	lines = append(lines, shared.ResourceLines(ctx, n, inner)...)
 	for i := range lines {
-		lines[i] = shared.FitLine(lines[i], width-4)
+		lines[i] = shared.FitLine(lines[i], inner)
 	}
-	return lipgloss.NewStyle().Width(width-2).Padding(0, 1).Border(shared.CardBorder).
-		BorderForeground(border).Render(strings.Join(lines, "\n"))
+	return cardFrame(lines, width, border, n.Primary)
 }
 
 func nodeStorage(ctx shared.Context, n shared.Node) string {
@@ -112,112 +99,335 @@ func nodeStorage(ctx shared.Context, n shared.Node) string {
 	return shared.Muted.Render(strings.Join(volumes, " · "))
 }
 
-// Topology renders the graphical primary/replica topology used by tests and the
-// compact topology panels.
+// Topology renders the cluster as a pyramid: primary on top, replicas below,
+// with WAL sync flow drawn on the links. Broken or stale senders use dashed
+// lines so a gap in replication is visible.
 func Topology(ctx shared.Context, width int) string {
+	width = max(20, width)
 	nodes := ctx.Nodes()
 	selected := shared.SelectedIndex(nodes, ctx.SelectedPod)
-	if width < 96 || len(nodes) == 1 {
-		rows := []string{nodeBox(ctx, nodes[0], width, selected == 0)}
-		for i, n := range nodes[1:] {
-			branch := "├"
-			if i == len(nodes)-2 {
-				branch = "╰"
-			}
-			rows = append(rows, shared.Muted.Render("  │  WAL replication"))
-			box := strings.Split(nodeBox(ctx, n, width-5, selected == i+1), "\n")
-			lineStyle, dash := shared.Cyan, "─"
-			r := ctx.Replication(n.Name)
-			if r == nil || r.State != "streaming" {
-				lineStyle, dash = shared.Amber, "┄"
-			}
-			if !ctx.SQLLive {
-				lineStyle = shared.Muted
-			}
-			for j, line := range box {
-				prefix := "  │  "
-				if j == NodeHeight/2 {
-					prefix = "  " + branch + dash + "→"
-				} else if i == len(nodes)-2 && j > NodeHeight/2 {
-					prefix = "     "
-				}
-				rows = append(rows, lineStyle.Render(prefix)+line)
-			}
-		}
-		if len(nodes) == 1 {
-			rows = append(rows, shared.Muted.Render("  No replica pods reported"))
-		}
-		return strings.Join(rows, "\n")
+	if len(nodes) == 1 {
+		return strings.Join([]string{nodeBox(ctx, nodes[0], width, selected == 0), shared.Muted.Render("  No replica pods reported")}, "\n")
 	}
-	const linkWidth = 13
-	leftWidth := (width - linkWidth) / 2
-	rightWidth := width - linkWidth - leftWidth
-	var right []string
-	for i, n := range nodes[1:] {
+	if canPyramid(width, len(nodes)-1) {
+		return pyramidTopology(ctx, nodes, selected, width)
+	}
+	return stackedTopology(ctx, nodes, selected, width)
+}
+
+func canPyramid(width, replicas int) bool {
+	return replicas > 0 && replicas*minPyramidBox+(replicas-1)*pyramidGap <= width
+}
+
+func pyramidTopology(ctx shared.Context, nodes []shared.Node, selected, width int) string {
+	replicas := nodes[1:]
+	boxW := max(minPyramidBox, (width-(len(replicas)-1)*pyramidGap)/len(replicas))
+	rowW := len(replicas)*boxW + (len(replicas)-1)*pyramidGap
+	rowLeft := max(0, (width-rowW)/2)
+	xs := make([]int, len(replicas))
+	flows := make([]walFlow, len(replicas))
+	boxes := make([]string, 0, len(replicas)*2-1)
+	for i, n := range replicas {
 		if i > 0 {
-			right = append(right, strings.Repeat(" ", rightWidth))
+			boxes = append(boxes, spacer(pyramidGap, NodeHeight))
 		}
-		right = append(right, strings.Split(nodeBox(ctx, n, rightWidth, selected == i+1), "\n")...)
+		boxes = append(boxes, nodeBox(ctx, n, boxW, selected == i+1))
+		xs[i] = rowLeft + i*(boxW+pyramidGap) + boxW/2
+		flows[i] = replicaFlow(ctx, n.Name)
 	}
-	primary := strings.Split(nodeBox(ctx, nodes[0], leftWidth, selected == 0), "\n")
-	first, last := NodeHeight/2, len(right)-1-NodeHeight/2
-	source := (first + last) / 2
-	primaryStart := source - NodeHeight/2
-	rows := make([]string, len(right))
-	for y := range rows {
-		left := strings.Repeat(" ", leftWidth)
-		if y >= primaryStart && y < primaryStart+len(primary) {
-			left = primary[y-primaryStart]
+	return strings.Join([]string{
+		nodeBox(ctx, nodes[0], width, selected == 0),
+		strings.Join(pyramidLinks(width, width/2, xs, flows, ctx), "\n"),
+		centerBlock(lipgloss.JoinHorizontal(lipgloss.Top, boxes...), width),
+	}, "\n")
+}
+
+func stackedTopology(ctx shared.Context, nodes []shared.Node, selected, width int) string {
+	rows := []string{nodeBox(ctx, nodes[0], width, selected == 0)}
+	rows = append(rows, flowTrunk(ctx, width)...)
+	for i, n := range nodes[1:] {
+		last := i == len(nodes)-2
+		if i > 0 {
+			rows = append(rows, replicaFlow(ctx, n.Name).style.Render("  │"))
 		}
-		link := []rune(strings.Repeat(" ", linkWidth))
-		if y >= first && y <= last {
-			link[6] = '│'
-		}
-		target := y >= first && (y-first)%(NodeHeight+1) == 0
-		if target {
-			link[6] = '├'
-			if y == first {
-				link[6] = '╭'
-			}
-			if y == last {
-				link[6] = '╰'
-			}
-			for x := 7; x < linkWidth-1; x++ {
-				link[x] = '─'
-			}
-			link[linkWidth-1] = '→'
-		}
-		if y == source {
-			for x := 0; x < 6; x++ {
-				link[x] = '─'
-			}
-			link[6] = '┤'
-			if target {
-				link[6] = '┼'
-				if first == last {
-					link[6] = '─'
-				}
-			}
-		}
-		linkColor := shared.Cyan
-		if !ctx.SQLLive {
-			linkColor = shared.Muted
-		}
-		if target {
-			r := ctx.Replication(nodes[1+(y-first)/(NodeHeight+1)].Name)
-			if r == nil || r.State != "streaming" {
-				linkColor = shared.Amber
-				if !ctx.SQLLive {
-					linkColor = shared.Muted
-				}
-				for x := 7; x < linkWidth-1; x++ {
-					link[x] = '┄'
-				}
-			}
-		}
-		rows[y] = left + linkColor.Render(string(link)) + right[y]
+		rows = append(rows, stackedDrop(ctx, n, width, last))
+		rows = append(rows, nodeBox(ctx, n, width, selected == i+1))
 	}
 	return strings.Join(rows, "\n")
+}
+
+type walFlow struct {
+	style  lipgloss.Style
+	dashed bool
+	broken bool
+	label  string
+	detail string
+}
+
+func replicaFlow(ctx shared.Context, name string) walFlow {
+	if !ctx.SQLLive {
+		return walFlow{style: shared.Muted, dashed: true, label: "unknown", detail: "replication stale"}
+	}
+	if r := ctx.Replication(name); r != nil {
+		f := walFlow{
+			style:  shared.Green,
+			label:  shared.ValueOr(r.State, "unknown"),
+			detail: "lag " + shared.ReplayLag(r),
+		}
+		if r.State != "streaming" {
+			f.style, f.dashed = shared.Amber, true
+			if r.State == "" || r.State == "stopped" {
+				f.broken, f.label, f.detail = true, "BROKEN", shared.ValueOr(r.State, "sender stopped")
+			}
+		} else if r.LagBytes != nil && *r.LagBytes > 1024*1024 {
+			f.style = shared.Amber
+		}
+		return f
+	}
+	for _, join := range monitor.ReplicaJoins(ctx.Data, ctx.SQLLive) {
+		if join.Name == name {
+			return walFlow{style: shared.Amber, dashed: true, label: "joining", detail: shared.ReplicaJoinCompact(join)}
+		}
+	}
+	return walFlow{style: shared.Red, dashed: true, broken: true, label: "BROKEN", detail: "no sender"}
+}
+
+func (f walFlow) head() rune {
+	if f.broken {
+		return '✕'
+	}
+	return '▼'
+}
+
+func (f walFlow) vertical() rune {
+	if f.dashed {
+		return '┆'
+	}
+	return '│'
+}
+
+func flowTrunk(ctx shared.Context, width int) []string {
+	style := shared.Cyan
+	if !ctx.SQLLive {
+		style = shared.Muted
+	}
+	label := "WAL sync"
+	if ctx.SQLLive && ctx.Data.Sql.WAL != nil {
+		label += "  " + shared.Rate(ctx.Data.WalRate)
+	}
+	return []string{style.Render(shared.FitLine("  │  "+label, width))}
+}
+
+func stackedDrop(ctx shared.Context, n shared.Node, width int, last bool) string {
+	f := replicaFlow(ctx, n.Name)
+	branch, dash := "├", "─"
+	if last {
+		branch = "╰"
+	}
+	if f.dashed {
+		dash = "┄"
+	}
+	line := "  " + branch + dash + string(f.head()) + " " + n.Name + "  " + f.label + " · " + f.detail
+	return f.style.Render(shared.FitLine(line, width))
+}
+
+func pyramidLinks(width, primaryX int, xs []int, flows []walFlow, ctx shared.Context) []string {
+	stem := trunkStyle(ctx, flows)
+	rows := make([][]ink, 4)
+	for i := range rows {
+		rows[i] = newInkRow(width)
+	}
+	setInk(rows[0], primaryX, '│', stem)
+	if len(xs) == 1 {
+		v := flows[0].vertical()
+		setInk(rows[0], xs[0], v, flows[0].style)
+		setInk(rows[1], xs[0], v, flows[0].style)
+	} else {
+		drawFork(rows[1], primaryX, xs, flows, stem)
+	}
+	for i, x := range xs {
+		f := flows[i]
+		setInk(rows[2], x, f.vertical(), f.style)
+		if room := captionRoom(xs, i, width); room > 1 {
+			writeRunes(rows[2], x+2, shared.Truncate(flowCaption(f), room), f.style)
+		}
+		setInk(rows[3], x, f.head(), f.style)
+	}
+	out := make([]string, len(rows))
+	for i, row := range rows {
+		out[i] = renderInk(row)
+	}
+	return out
+}
+
+func drawFork(row []ink, primaryX int, xs []int, flows []walFlow, stem lipgloss.Style) {
+	left, right := xs[0], xs[len(xs)-1]
+	for x := left; x <= right && x < len(row); x++ {
+		ch, style := '─', stem
+		if dashedToward(x, primaryX, xs, flows) {
+			ch = '┄'
+			style = flows[nearestIndex(xs, x)].style
+		}
+		switch {
+		case x == left:
+			ch = '╭'
+		case x == right:
+			ch = '╮'
+		case x == primaryX && hasInt(xs, primaryX):
+			ch, style = '┼', stem
+		case x == primaryX:
+			ch, style = '┴', stem
+		case hasInt(xs, x):
+			ch = '┬'
+			style = flows[nearestIndex(xs, x)].style
+		}
+		setInk(row, x, ch, style)
+	}
+}
+
+func dashedToward(x, primaryX int, xs []int, flows []walFlow) bool {
+	if x == primaryX {
+		return false
+	}
+	for i, rx := range xs {
+		if x < primaryX && rx <= x && flows[i].dashed {
+			return true
+		}
+		if x > primaryX && rx >= x && flows[i].dashed {
+			return true
+		}
+	}
+	return false
+}
+
+func captionRoom(xs []int, i, width int) int {
+	right := width - xs[i] - 2
+	if i+1 < len(xs) {
+		right = xs[i+1] - xs[i] - 2
+	}
+	return max(0, min(14, right))
+}
+
+func flowCaption(f walFlow) string {
+	if f.broken {
+		return f.label
+	}
+	if f.detail != "" {
+		return f.detail
+	}
+	return f.label
+}
+
+func cardFrame(lines []string, width int, border lipgloss.Color, joinBottom bool) string {
+	inner := max(0, width-2)
+	fg := lipgloss.NewStyle().Foreground(border)
+	out := []string{fg.Render("╭" + strings.Repeat("─", inner) + "╮")}
+	for _, line := range lines {
+		out = append(out, fg.Render("│")+line+strings.Repeat(" ", max(0, inner-lipgloss.Width(line)))+fg.Render("│"))
+	}
+	if !joinBottom {
+		return strings.Join(append(out, fg.Render("╰"+strings.Repeat("─", inner)+"╯")), "\n")
+	}
+	mid := inner / 2
+	left := fg.Render("╰" + strings.Repeat("─", mid))
+	right := fg.Render(strings.Repeat("─", max(0, inner-mid-1)) + "╯")
+	return strings.Join(append(out, left+shared.Cyan.Render("┬")+right), "\n")
+}
+
+func trunkStyle(ctx shared.Context, flows []walFlow) lipgloss.Style {
+	if !ctx.SQLLive {
+		return shared.Muted
+	}
+	for _, f := range flows {
+		if !f.broken {
+			return shared.Cyan
+		}
+	}
+	return shared.Amber
+}
+
+type ink struct {
+	ch    rune
+	style lipgloss.Style
+	set   bool
+}
+
+func newInkRow(width int) []ink {
+	return make([]ink, width)
+}
+
+func setInk(row []ink, x int, ch rune, style lipgloss.Style) {
+	if x >= 0 && x < len(row) {
+		row[x] = ink{ch: ch, style: style, set: true}
+	}
+}
+
+func writeRunes(row []ink, x int, text string, style lipgloss.Style) {
+	for i, r := range []rune(text) {
+		setInk(row, x+i, r, style)
+	}
+}
+
+func writeCentered(row []ink, cx int, text string, style lipgloss.Style) {
+	runes := []rune(text)
+	writeRunes(row, cx-len(runes)/2, text, style)
+}
+
+func renderInk(row []ink) string {
+	var b strings.Builder
+	for _, c := range row {
+		if !c.set {
+			b.WriteByte(' ')
+			continue
+		}
+		b.WriteString(c.style.Render(string(c.ch)))
+	}
+	return b.String()
+}
+
+func centerBlock(block string, width int) string {
+	lines := strings.Split(block, "\n")
+	blockW := 0
+	for _, line := range lines {
+		blockW = max(blockW, lipgloss.Width(line))
+	}
+	pad := max(0, (width-blockW)/2)
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, shared.FitLine(strings.Repeat(" ", pad)+line, width))
+	}
+	return strings.Join(out, "\n")
+}
+
+func spacer(w, h int) string {
+	line := strings.Repeat(" ", w)
+	return strings.Repeat(line+"\n", max(0, h-1)) + line
+}
+
+func hasInt(xs []int, v int) bool {
+	for _, x := range xs {
+		if x == v {
+			return true
+		}
+	}
+	return false
+}
+
+func nearestIndex(xs []int, v int) int {
+	best := 0
+	for i, x := range xs {
+		if abs(x-v) < abs(xs[best]-v) {
+			best = i
+		}
+	}
+	return best
+}
+
+func abs(n int) int {
+	if n < 0 {
+		return -n
+	}
+	return n
 }
 
 func podDetails(ctx shared.Context) []string {
@@ -235,7 +445,8 @@ func podDetails(ctx shared.Context) []string {
 	lines := []string{shared.Bright.Bold(true).Render(n.Name) + shared.Muted.Render("  /  "+role)}
 	if n.Pod != nil {
 		health, style := shared.PodHealth(n.Pod)
-		lines = append(lines, style.Render(health)+fmt.Sprintf(" · %d restarts · created %s", shared.Restarts(n.Pod), shared.Relative(n.Pod.Metadata.CreationTimestamp)), "Node  "+shared.ValueOr(n.Pod.Spec.NodeName, "not assigned"))
+		lines = append(lines, style.Render(health)+fmt.Sprintf(" · %d restarts · created %s · %s", shared.Restarts(n.Pod), shared.Relative(n.Pod.Metadata.CreationTimestamp), shared.NodeName(n)))
+		lines = append(lines, shared.ResourceLines(ctx, n, 64)...)
 	} else {
 		lines = append(lines, shared.Muted.Render("Pod details unavailable"))
 	}

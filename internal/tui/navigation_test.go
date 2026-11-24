@@ -12,7 +12,7 @@ import (
 func TestNavigationRevealsPanelsAndSelectedPods(t *testing.T) {
 	m := fixture(t, 5)
 	m.height = 24
-	labels := []string{"Topology", "WAL flow", "Running", "Top statements", "Blocking chain", "Selected pod"}
+	labels := []string{"Instances", "WAL flow", "Running", "Top statements", "Blocking chain", "Selected pod"}
 	for i, label := range labels {
 		updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(fmt.Sprint(i + 1))})
 		m = updated.(model)

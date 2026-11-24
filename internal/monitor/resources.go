@@ -25,6 +25,18 @@ type ClusterResource struct {
 				Database string `json:"database"`
 			} `json:"recovery"`
 		} `json:"bootstrap"`
+		Backup *struct {
+			BarmanObjectStore *struct {
+				DestinationPath string `json:"destinationPath"`
+			} `json:"barmanObjectStore"`
+			VolumeSnapshot *struct {
+				ClassName string `json:"className"`
+			} `json:"volumeSnapshot"`
+		} `json:"backup"`
+		Plugins []struct {
+			Name          string `json:"name"`
+			IsWALArchiver *bool  `json:"isWALArchiver"`
+		} `json:"plugins"`
 	} `json:"spec"`
 	Status struct {
 		FirstRecoverabilityPoint string   `json:"firstRecoverabilityPoint"`
@@ -54,7 +66,14 @@ type PodResource struct {
 		} `json:"ownerReferences"`
 	} `json:"metadata"`
 	Spec struct {
-		NodeName string `json:"nodeName"`
+		NodeName   string `json:"nodeName"`
+		Containers []struct {
+			Name      string `json:"name"`
+			Resources struct {
+				Limits   map[string]string `json:"limits"`
+				Requests map[string]string `json:"requests"`
+			} `json:"resources"`
+		} `json:"containers"`
 	} `json:"spec"`
 	Status struct {
 		Phase             string `json:"phase"`
@@ -62,6 +81,16 @@ type PodResource struct {
 			Ready        bool `json:"ready"`
 			RestartCount int  `json:"restartCount"`
 		} `json:"containerStatuses"`
+	} `json:"status"`
+}
+
+type NodeResource struct {
+	Metadata struct {
+		Name string `json:"name"`
+	} `json:"metadata"`
+	Status struct {
+		Allocatable map[string]string `json:"allocatable"`
+		Capacity    map[string]string `json:"capacity"`
 	} `json:"status"`
 }
 
@@ -78,6 +107,7 @@ type PVCResource struct {
 type BackupResource struct {
 	Metadata struct {
 		Name              string    `json:"name"`
+		UID               string    `json:"uid"`
 		CreationTimestamp time.Time `json:"creationTimestamp"`
 	} `json:"metadata"`
 	Spec struct {

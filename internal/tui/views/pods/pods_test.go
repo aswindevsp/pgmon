@@ -26,7 +26,7 @@ func fixture(t *testing.T, replicas int) shared.Context {
 	ctx.Data.WalRate = 2048
 	for i := 1; i <= replicas+1; i++ {
 		var p monitor.PodResource
-		raw := fmt.Sprintf(`{"metadata":{"name":"postgres-%d"},"spec":{"nodeName":"worker-%d"},"status":{"phase":"Running","containerStatuses":[{"ready":true,"restartCount":0}]}}`, i, i)
+		raw := fmt.Sprintf(`{"metadata":{"name":"postgres-%d"},"spec":{"nodeName":"worker-%d","containers":[{"name":"postgres","resources":{"limits":{"cpu":"1","memory":"1Gi"},"requests":{"cpu":"100m","memory":"256Mi"}}}]},"status":{"phase":"Running","containerStatuses":[{"ready":true,"restartCount":0}]}}`, i, i)
 		if err := json.Unmarshal([]byte(raw), &p); err != nil {
 			t.Fatal(err)
 		}
@@ -44,9 +44,9 @@ func TestTopologyBranches(t *testing.T) {
 		for _, width := range []int{32, 48, 80, 98, 120, 160} {
 			ctx := fixture(t, replicas)
 			graph := Topology(ctx, width-2)
-			// Each replica must receive exactly one incoming branch at every size.
-			if got := strings.Count(graph, "→") - 1; got != replicas {
-				t.Errorf("replicas=%d width=%d: got %d branches", replicas, width, got)
+			// Each replica must receive exactly one incoming WAL flow at every size.
+			if got := strings.Count(graph, "▼"); got != replicas {
+				t.Errorf("replicas=%d width=%d: got %d branches\n%s", replicas, width, got, graph)
 			}
 			for _, line := range strings.Split(graph, "\n") {
 				if lipgloss.Width(line) > width-2 {
@@ -70,8 +70,108 @@ func TestTopologyDoesNotHideUnreadyOrStaleData(t *testing.T) {
 	}
 	ctx = fixture(t, 2)
 	ctx.Data.Sql.Replication = nil
-	if !strings.Contains(Topology(ctx, 118), "No matching WAL sender") || !strings.Contains(Topology(ctx, 118), "┄") {
-		t.Fatal("missing replication connection is not identified")
+	broken := Topology(ctx, 118)
+	if !strings.Contains(broken, "No matching WAL sender") || !strings.Contains(broken, "BROKEN") || !strings.Contains(broken, "┄") {
+		t.Fatal("missing replication connection is not identified:\n", broken)
+	}
+}
+
+func TestTopologyMarksBrokenWALFlow(t *testing.T) {
+	ctx := fixture(t, 2)
+	ctx.Data.Sql.Replication[0].State = "stopped"
+	ctx.Data.Sql.Replication[1] = monitor.ReplicationStatus{}
+	graph := Topology(ctx, 118)
+	if !strings.Contains(graph, "BROKEN") || !strings.Contains(graph, "✕") || !strings.Contains(graph, "┄") {
+		t.Fatal("broken WAL path should be visible:\n", graph)
+	}
+}
+
+func TestTopologyPyramidPutsPrimaryAboveReplicas(t *testing.T) {
+	ctx := fixture(t, 2)
+	graph := Topology(ctx, 118)
+	primary := strings.Index(graph, "postgres-1")
+	left := strings.Index(graph, "postgres-2")
+	right := strings.Index(graph, "postgres-3")
+	if primary < 0 || left < primary || right < primary {
+		t.Fatal("primary should sit above replicas:\n", graph)
+	}
+	sideBySide := false
+	for _, line := range strings.Split(graph, "\n") {
+		if strings.Contains(line, "postgres-2") && strings.Contains(line, "postgres-3") {
+			sideBySide = true
+		}
+	}
+	if !sideBySide {
+		t.Fatal("replicas should sit side by side under the primary:\n", graph)
+	}
+}
+
+func TestTopologyShowsNodeAndLiveUsage(t *testing.T) {
+	ctx := fixture(t, 1)
+	ctx.Data.PodUsage = map[string]monitor.ResourceUsage{
+		"postgres-1": {CPUCores: 0.045, MemoryBytes: 256 << 20},
+		"postgres-2": {CPUCores: 0.012, MemoryBytes: 180 << 20},
+	}
+	ctx.Data.PodUsageHistory = map[string]monitor.UsageHistory{
+		"postgres-1": {CPU: []float64{0.02, 0.03, 0.045}, Memory: []float64{200 << 20, 220 << 20, 256 << 20}},
+		"postgres-2": {CPU: []float64{0.01, 0.011, 0.012}, Memory: []float64{160 << 20, 170 << 20, 180 << 20}},
+	}
+	ctx.Data.NodeUsageHistory = map[string]monitor.UsageHistory{
+		"worker-1": {CPU: []float64{1.4, 1.8, 2.1}},
+	}
+	graph := Topology(ctx, 118)
+	for _, want := range []string{"worker-1", "worker-2", "45m / 1", "256Mi / 1Gi", "█", "░"} {
+		if !strings.Contains(graph, want) {
+			t.Errorf("missing %q:\n%s", want, graph)
+		}
+	}
+	ctx.Data.PodUsage, ctx.Data.PodUsageHistory, ctx.Data.NodeUsage = nil, nil, nil
+	ctx.Data.MetricsErr = "metrics.k8s.io unavailable"
+	missing := Topology(ctx, 118)
+	if !strings.Contains(missing, "unavailable") || !strings.Contains(missing, "worker-1") || !strings.Contains(missing, "/ 1") {
+		t.Fatal("node and limits should remain visible when usage cannot be sampled:\n", missing)
+	}
+}
+
+func TestTopologyUsesNodeCapWhenPodHasNone(t *testing.T) {
+	ctx := fixture(t, 0)
+	ctx.Data.Pods[0].Spec.Containers[0].Resources.Limits = nil
+	ctx.Data.Pods[0].Spec.Containers[0].Resources.Requests = nil
+	ctx.Data.NodeCaps = map[string]monitor.ResourceCap{
+		"worker-1": {CPUCores: 8, MemoryBytes: 32 << 30, HasCPU: true, HasMemory: true},
+	}
+	ctx.Data.PodUsage = map[string]monitor.ResourceUsage{
+		"postgres-1": {CPUCores: 0.315, MemoryBytes: 16<<30 + 300<<20},
+	}
+	graph := Topology(ctx, 118)
+	if !strings.Contains(graph, "315m / 8") || !strings.Contains(graph, "/ 32Gi") {
+		t.Fatal("pod without limits should use node allocatable:\n", graph)
+	}
+	if strings.Contains(graph, " / —") {
+		t.Fatal("node cap should replace the missing pod limit:\n", graph)
+	}
+}
+
+func TestTopologyShowsAvailableWhenPodHasNoLimits(t *testing.T) {
+	ctx := fixture(t, 0)
+	ctx.Data.Pods[0].Spec.Containers[0].Resources.Limits = nil
+	ctx.Data.Pods[0].Spec.Containers[0].Resources.Requests = nil
+	ctx.Data.NodeCaps = map[string]monitor.ResourceCap{
+		"worker-1": {CPUCores: 8, MemoryBytes: 32 << 30, HasCPU: true, HasMemory: true},
+	}
+	ctx.Data.PodUsage = map[string]monitor.ResourceUsage{
+		"postgres-1": {CPUCores: 0.5, MemoryBytes: 16 << 30},
+	}
+	ctx.Data.NodeUsage = map[string]monitor.ResourceUsage{
+		"worker-1": {CPUCores: 2, MemoryBytes: 20 << 30},
+	}
+	graph := Topology(ctx, 118)
+	// Available = allocatable - (nodeUsage - podUsage): CPU 8-(2-0.5)=6.5, MEM 32-(20-16)=28.
+	if !strings.Contains(graph, "500m / 6.50 (8)") {
+		t.Error("CPU should show available with node cap in parens:\n", graph)
+	}
+	if !strings.Contains(graph, "16Gi / 28Gi (32Gi)") {
+		t.Error("MEM should show available with node cap in parens:\n", graph)
 	}
 }
 

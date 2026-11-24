@@ -31,6 +31,15 @@ func BackupStart(b BackupResource) time.Time {
 	return b.Metadata.CreationTimestamp
 }
 
+// BackupProcessName returns the barman process --name to match.
+// It returns status.backupName when reported. When empty, callers should
+// discover the unique running process instead of guessing from
+// reconciliationStartedAt, which can differ by a second from the real
+// process name (e.g. recon 03:57:47 vs process backup-20261006035748).
+func BackupProcessName(b BackupResource) string {
+	return b.Status.BackupName
+}
+
 // Prefer the active backup over a newer pending scheduled backup.
 func SelectedBackup(Backups []BackupResource) (BackupResource, bool) {
 	var chosen BackupResource
@@ -65,14 +74,10 @@ func collectBackupProgress(cfg Config, s *Snapshot) {
 		}
 		p.Container = "plugin-barman-cloud"
 	}
-	name := b.Status.BackupName
-	if name == "" && !b.Status.ReconciliationStartedAt.IsZero() {
-		name = "backup-" + b.Status.ReconciliationStartedAt.UTC().Format("20060102150405")
-	}
-	if name == "" {
-		p.Error = "Backup process name is not available yet"
-		return
-	}
+	name := BackupProcessName(b)
+	// Empty means status.backupName not reported yet: ask the probe to
+	// discover the unique barman-cloud-backup process instead of guessing
+	// from reconciliationStartedAt.
 	var sample BackupProgress
 	if err := GetJSON(cfg, &sample, "exec", p.Pod, "-c", p.Container, "--", "python3", "-c", backupProbe, name); err != nil {
 		p.Error = "Process metrics unavailable: check pod exec permission and Python availability"

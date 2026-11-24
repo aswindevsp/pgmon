@@ -18,6 +18,12 @@ func Render(ctx shared.Context, width int) string {
 	if rec := clusterRecoveryLines(ctx, width); len(rec) > 0 {
 		sections = append(sections, shared.DashboardPanel("Cluster recovery", rec, width))
 	}
+	sections = append(sections, shared.DashboardPanel(backupHistoryTitle(ctx.Data.Backups), backupHistoryLines(ctx, width), width))
+	sections = append(sections, shared.DashboardPanel("Backup actions", backupActionLines(ctx, width), width))
+	if ctx.BackupConfirmKind != "" {
+		title, lines := backupConfirmPanel(ctx)
+		sections = append(sections, shared.DashboardPanel(title, lines, width))
+	}
 	var running, pending []monitor.BackupResource
 	for _, b := range ctx.Data.Backups {
 		switch {
@@ -31,24 +37,88 @@ func Render(ctx shared.Context, width int) string {
 	sort.Slice(pending, func(i, j int) bool { return monitor.BackupStart(pending[i]).Before(monitor.BackupStart(pending[j])) })
 	runLines := []string{}
 	for _, b := range running {
-		runLines = append(runLines, shared.Bright.Bold(true).Render(b.Metadata.Name)+shared.Muted.Render("  "+backupMethod(b)+" · "+shared.ValueOr(b.Status.Phase, "phase unknown")))
+		runLines = append(runLines, shared.Bright.Bold(true).Render(b.Metadata.Name)+shared.Muted.Render("  "+backupMethod(b)+" · "+shared.ValueOr(b.Status.Phase, "phase unknown")+" · "+backupPodPhrase(b)))
 		runLines = append(runLines, backupProgressLines(ctx, b)...)
 	}
 	if len(running) == 0 {
 		runLines = append(runLines, shared.Muted.Render("No running backup reported"))
 	}
 	for _, b := range pending {
-		runLines = append(runLines, shared.Amber.Render("◷ queued  ")+b.Metadata.Name)
+		runLines = append(runLines, shared.Amber.Render("◷ queued  ")+b.Metadata.Name+shared.Muted.Render("  "+backupPodPhrase(b)))
 	}
 	if ctx.Data.ResourceErr != "" {
 		runLines = append(runLines, shared.Amber.Render("Kubernetes data may be stale"))
 	}
 
 	sections = append(sections, shared.DashboardPanel(fmt.Sprintf("Running %d, queued %d", len(running), len(pending)), runLines, width))
+	sections = append(sections, shared.DashboardPanel("Schedules", backupScheduleLines(ctx), width))
 	sections = append(sections, shared.DashboardPanel("Point-in-time recovery window", recoveryWindowLines(ctx), width))
-	sections = append(sections, shared.DashboardPanel("Backups", backupHistoryLines(ctx, width), width))
 	sections = append(sections, shared.DashboardPair("WAL archiving", archiveDashboardLines(ctx), "Restore check", restoreCheckLines(), width))
 	return shared.StackDashboards(sections...)
+}
+
+func backupActionLines(ctx shared.Context, width int) []string {
+	lines := []string{}
+	if ctx.BackupSelected != "" {
+		if b, ok := monitor.FindBackupByName(ctx.Data.Backups, ctx.BackupSelected); ok {
+			lines = append(lines, "Selected  "+shared.Bright.Render(b.Metadata.Name)+shared.Muted.Render(" · "+shared.ValueOr(b.Status.Phase, "phase unknown")+" · "+backupPodPhrase(b)))
+		} else {
+			lines = append(lines, "Selected  "+ctx.BackupSelected+shared.Muted.Render(" · not found"))
+		}
+	} else {
+		lines = append(lines, shared.Muted.Render("No backup selected"))
+	}
+	controls := "↑↓ select · n new · d delete resource · x stop unavailable"
+	if width < 70 {
+		controls = "↑↓ select · n new · d delete"
+	}
+	lines = append(lines, shared.Muted.Render(controls))
+	if ok, method, plugin := monitor.StartBackupPlan(ctx.Data); ok {
+		desc := "New backup  " + method
+		if plugin != "" {
+			desc += " · " + plugin
+		}
+		lines = append(lines, shared.Muted.Render(desc+" → ")+shared.ValueOr(ctx.Cluster, "—"))
+	} else {
+		_, reason := monitor.CanStartBackup(ctx.Data)
+		lines = append(lines, shared.Muted.Render("New backup unavailable: "+shared.ValueOr(reason, "no backup configuration")))
+	}
+	if ctx.BackupBusy {
+		lines = append(lines, shared.Amber.Render("working · "+shared.ValueOr(ctx.BackupNotice, "request in progress")))
+	} else if ctx.BackupNotice != "" {
+		lines = append(lines, ctx.BackupNotice)
+	}
+	if ctx.Data.ResourceErr != "" {
+		lines = append(lines, shared.Amber.Render("Kubernetes data may be stale: "+ctx.Data.ResourceErr))
+	}
+	return lines
+}
+
+func backupConfirmPanel(ctx shared.Context) (string, []string) {
+	controls := shared.Muted.Render("y/Enter confirm · Esc cancel")
+	switch ctx.BackupConfirmKind {
+	case "start":
+		method := shared.ValueOr(ctx.BackupConfirmMeth, "unknown")
+		lines := []string{
+			"Start backup for cluster " + shared.Bright.Render(shared.ValueOr(ctx.Cluster, "—")) + shared.Muted.Render(" in "+shared.ValueOr(ctx.Namespace, "—")),
+			"Method " + method,
+		}
+		if ctx.BackupConfirmPlug != "" {
+			lines = append(lines, "Plugin "+ctx.BackupConfirmPlug)
+		}
+		lines = append(lines, "A unique Backup name will be generated.", "Only CNPG phase completed confirms success.", controls)
+		return "Confirm start backup", lines
+	case "delete":
+		lines := []string{
+			"Delete Backup resource " + shared.Bright.Render(ctx.BackupConfirmName),
+			"Phase " + shared.ValueOr(ctx.BackupConfirmPhase, "unknown"),
+			shared.Muted.Render("Removes only the Kubernetes Backup resource; object-store cleanup is method-specific."),
+			controls,
+		}
+		return "Confirm delete Backup resource", lines
+	default:
+		return "Confirm", []string{controls}
+	}
 }
 
 func backupMethod(b monitor.BackupResource) string {
@@ -56,6 +126,24 @@ func backupMethod(b monitor.BackupResource) string {
 		return b.Status.Method
 	}
 	return shared.ValueOr(b.Spec.Method, "method unknown")
+}
+
+func backupPod(b monitor.BackupResource) string {
+	return strings.TrimSpace(b.Status.InstanceID.PodName)
+}
+
+func backupPodLabel(b monitor.BackupResource) string {
+	if pod := backupPod(b); pod != "" {
+		return pod
+	}
+	return "—"
+}
+
+func backupPodPhrase(b monitor.BackupResource) string {
+	if pod := backupPod(b); pod != "" {
+		return "on " + pod
+	}
+	return "pod not assigned"
 }
 
 func recoveryWindowLines(ctx shared.Context) []string {
@@ -79,17 +167,24 @@ func recoveryWindowLines(ctx shared.Context) []string {
 	return lines
 }
 
+func backupHistoryTitle(backups []monitor.BackupResource) string {
+	total := len(backups)
+	shown := min(total, monitor.BackupHistoryLimit)
+	if total <= monitor.BackupHistoryLimit {
+		return "Backups"
+	}
+	return fmt.Sprintf("Backups · last %d of %d", shown, total)
+}
+
 func backupHistoryLines(ctx shared.Context, width int) []string {
-	Backups := append([]monitor.BackupResource(nil), ctx.Data.Backups...)
-	sort.Slice(Backups, func(i, j int) bool {
-		return monitor.BackupStart(Backups[i]).After(monitor.BackupStart(Backups[j]))
-	})
+	all := monitor.OrderedBackups(ctx.Data.Backups)
+	Backups := monitor.RecentBackups(all, monitor.BackupHistoryLimit)
 	wide := width >= 96
 	lines := []string{}
-	if len(Backups) == 0 {
+	if len(all) == 0 {
 		lines = append(lines, shared.Muted.Render("No Backup resources found"))
 	} else if wide {
-		lines = append(lines, shared.Muted.Render(fmt.Sprintf("%-32s  %-15s  %-16s  %-9s  %s", "name", "method", "started", "took", "status")))
+		lines = append(lines, shared.Muted.Render(fmt.Sprintf("%-24s  %-12s  %-20s  %-12s  %-7s  %s", "name", "method", "pod", "started", "took", "status")))
 	}
 	for _, b := range Backups {
 		started := "—"
@@ -109,15 +204,26 @@ func backupHistoryLines(ctx shared.Context, width int) []string {
 		case "pending", "started", "running", "finalizing":
 			phase = shared.Amber.Render("◷ " + phase)
 		}
+		marker := "  "
+		if b.Metadata.Name != "" && b.Metadata.Name == ctx.BackupSelected {
+			marker = "› "
+		}
 		if wide {
-			lines = append(lines, fmt.Sprintf("%-32s  %-15s  %-16s  %-9s  %s", shared.Truncate(b.Metadata.Name, 32), shared.Truncate(backupMethod(b), 15), started, took, phase))
+			lines = append(lines, marker+fmt.Sprintf("%-24s  %-12s  %-20s  %-12s  %-7s  %s", shared.Truncate(b.Metadata.Name, 24), shared.Truncate(backupMethod(b), 12), shared.Truncate(backupPodLabel(b), 20), started, took, phase))
 		} else {
 			// Place status first, where it remains visible even at 48 columns.
-			lines = append(lines, phase+"  "+b.Metadata.Name)
-			lines = append(lines, shared.Muted.Render("  "+backupMethod(b)+" · started "+started+" · took "+took))
+			lines = append(lines, marker+phase+"  "+b.Metadata.Name)
+			lines = append(lines, shared.Muted.Render("  "+backupMethod(b)+" · "+backupPodPhrase(b)+" · started "+started+" · took "+took))
 		}
 	}
-	lines = append(lines, "", shared.PanelTitle.Render("Schedules"))
+	if hidden := len(all) - len(Backups); hidden > 0 {
+		lines = append(lines, shared.Muted.Render(fmt.Sprintf("%d older backups not shown", hidden)))
+	}
+	return lines
+}
+
+func backupScheduleLines(ctx shared.Context) []string {
+	lines := []string{}
 	if len(ctx.Data.Schedules) == 0 {
 		lines = append(lines, shared.Muted.Render("No ScheduledBackup resources found"))
 	}

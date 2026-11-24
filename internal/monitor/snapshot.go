@@ -83,6 +83,18 @@ type Snapshot struct {
 	TxHistory             []float64
 	ReplicationLagHistory map[string][]float64
 	BaseBackupRates       map[string]float64
+	PodUsage              map[string]ResourceUsage
+	NodeUsage             map[string]ResourceUsage
+	PodUsageHistory       map[string]UsageHistory
+	NodeUsageHistory      map[string]UsageHistory
+	NodeCaps              map[string]ResourceCap
+	MetricsErr            string
+}
+
+// UsageHistory is recent CPU and memory samples for one pod or node.
+type UsageHistory struct {
+	CPU    []float64
+	Memory []float64
 }
 
 type DatabaseStats struct {

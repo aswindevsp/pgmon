@@ -15,22 +15,30 @@ const (
 )
 
 type model struct {
-	cfg           monitor.Config
-	data          monitor.Snapshot
-	busy          bool
-	sqlBusy       bool
-	kubeBusy      bool
-	width, height int
-	focus         int
-	selectedPod   string
-	scroll        int
-	started       bool
-	row           int
-	detail        bool
-	help          bool
-	filter        string
-	filtering     bool
-	sortCalls     bool
+	cfg               monitor.Config
+	data              monitor.Snapshot
+	busy              bool
+	sqlBusy           bool
+	kubeBusy          bool
+	width, height     int
+	focus             int
+	selectedPod       string
+	scroll            int
+	started           bool
+	row               int
+	detail            bool
+	help              bool
+	filter            string
+	filtering         bool
+	sortCalls         bool
+	backupSel         string
+	backupConfirm     *backupConfirm
+	backupNotice      string
+	backupBusy        bool
+	switchoverConfirm *switchoverConfirm
+	switchoverNotice  string
+	switchoverBusy    bool
+	switchoverPending string
 }
 
 type refreshMsg struct {
@@ -71,6 +79,46 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		m, cmd := m.startCollects(true, !m.started || time.Since(m.data.KubeAt) >= kubeEvery)
 		return m, tea.Batch(cmd, tickCmd())
+	case backupCreateResult:
+		m.backupBusy = false
+		if msg.err != nil {
+			m.backupNotice = "Start failed: " + msg.err.Error()
+		} else {
+			m.backupSel = msg.name
+			m.backupNotice = "Backup " + msg.name + " created; waiting for CNPG phase (only completed confirms success)"
+		}
+		var cmd tea.Cmd
+		m, cmd = m.startCollects(false, true)
+		m.clampScroll()
+		return m, cmd
+	case backupDeleteResult:
+		m.backupBusy = false
+		if msg.err != nil {
+			m.backupNotice = "Delete failed: " + msg.err.Error()
+		} else {
+			if m.backupSel == msg.name {
+				m.backupSel = ""
+			}
+			m.backupNotice = "Backup resource " + msg.name + " deleted; object-store cleanup is method-specific"
+		}
+		var cmd tea.Cmd
+		m, cmd = m.startCollects(false, true)
+		m = m.reconcileAfterKube()
+		m.clampScroll()
+		return m, cmd
+	case switchoverResult:
+		m.switchoverBusy = false
+		if msg.err != nil {
+			m.switchoverNotice = "Switchover failed: " + msg.err.Error()
+			m.switchoverPending = ""
+		} else {
+			m.switchoverPending = msg.target
+			m.switchoverNotice = "Switchover requested: " + msg.primary + " → " + msg.target + "; waiting for currentPrimary to update"
+		}
+		var cmd tea.Cmd
+		m, cmd = m.startCollects(true, true)
+		m.clampScroll()
+		return m, cmd
 	case refreshMsg:
 		m.started = true
 		if msg.err == nil {
@@ -79,7 +127,9 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if msg.kube {
 				applyKube(&m.data, msg.data)
+				m = m.reconcileAfterKube()
 			}
+			m.applySwitchoverProgress()
 		}
 		if msg.Sql {
 			m.sqlBusy = false
@@ -93,6 +143,39 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		}
+		// While a confirmation is open, all other keys are inactive.
+		if m.confirmOpen() {
+			switch msg.String() {
+			case "esc":
+				m.backupConfirm = nil
+				m.switchoverConfirm = nil
+				m.clampScroll()
+				return m, nil
+			case "enter", "y", "Y":
+				if confirm := m.backupConfirm; confirm != nil {
+					m.backupConfirm = nil
+					m.backupBusy = true
+					m.backupNotice = backupRequestNotice(*confirm, m.cfg.Cluster)
+					if confirm.kind == "start" {
+						return m, createBackupCmd(m.cfg, confirm.method, confirm.plugin)
+					}
+					// Delete re-reads immediately before delete inside the command.
+					sel, _ := monitor.FindBackupByName(m.data.Backups, confirm.name)
+					// Preserve UID from confirm time to detect reuse.
+					if confirm.uid != "" {
+						sel.Metadata.UID = confirm.uid
+					}
+					return m, deleteBackupCmd(m.cfg, sel)
+				}
+				confirm := m.switchoverConfirm
+				m.switchoverConfirm = nil
+				m.switchoverBusy = true
+				m.switchoverNotice = switchoverRequestNotice(*confirm)
+				return m, promoteCmd(m.cfg, *confirm)
+			default:
+				return m, nil
+			}
 		}
 		if m.filtering {
 			switch msg.String() {
@@ -129,6 +212,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == 5 {
 				m.movePod(1)
 				m.scroll = 0
+			} else if m.focus == 0 {
+				m.selectPod(1)
+			} else if m.focus == 2 {
+				m.backupSel = nextBackupSelection(m.data.Backups, m.backupSel, 1)
+				m.showBackupSelection()
 			} else {
 				m.row++
 				m.scroll++
@@ -137,6 +225,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.focus == 5 {
 				m.movePod(-1)
 				m.scroll = 0
+			} else if m.focus == 0 {
+				m.selectPod(-1)
+			} else if m.focus == 2 {
+				m.backupSel = nextBackupSelection(m.data.Backups, m.backupSel, -1)
+				m.showBackupSelection()
 			} else {
 				m.row = max(0, m.row-1)
 				m.scroll = max(0, m.scroll-1)
@@ -162,6 +255,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "s":
 			m.sortCalls = !m.sortCalls
 			m.row = 0
+		case "n", "N":
+			if m.focus == 2 {
+				m.openStartConfirm()
+			}
+		case "x", "X":
+			if m.focus == 2 {
+				m.handleStopKey()
+			}
+		case "d", "D":
+			if m.focus == 2 {
+				m.openDeleteConfirm()
+			}
+		case "p", "P":
+			if m.focus == 0 || m.focus == 5 {
+				m.openSwitchoverConfirm()
+			}
 		case "home":
 			m.scroll, m.row = 0, 0
 		case "end":
@@ -221,6 +330,12 @@ func applyKube(dst *monitor.Snapshot, src monitor.Snapshot) {
 	dst.RestoreProgress = src.RestoreProgress
 	dst.Schedules = src.Schedules
 	dst.Events = src.Events
+	dst.PodUsage = src.PodUsage
+	dst.NodeUsage = src.NodeUsage
+	dst.PodUsageHistory = src.PodUsageHistory
+	dst.NodeUsageHistory = src.NodeUsageHistory
+	dst.NodeCaps = src.NodeCaps
+	dst.MetricsErr = src.MetricsErr
 }
 
 // sqlLive reports whether the last PostgreSQL sample still describes the
@@ -240,17 +355,38 @@ func (m model) sqlLive() bool {
 
 // viewContext builds the read-only input the tab packages render from.
 func (m model) viewContext() shared.Context {
-	return shared.Context{
-		Data:         m.data,
-		SelectedPod:  m.selectedPod,
-		SQLLive:      m.sqlLive(),
-		KubeBusy:     m.kubeBusy,
-		Started:      m.started,
-		Filter:       m.filter,
-		SortCalls:    m.sortCalls,
-		Detail:       m.detail,
-		Row:          m.row,
-		RefreshEvery: refreshEvery,
-		KubeEvery:    kubeEvery,
+	ctx := shared.Context{
+		Data:              m.data,
+		SelectedPod:       m.selectedPod,
+		SQLLive:           m.sqlLive(),
+		KubeBusy:          m.kubeBusy,
+		Started:           m.started,
+		Filter:            m.filter,
+		SortCalls:         m.sortCalls,
+		Detail:            m.detail,
+		Row:               m.row,
+		RefreshEvery:      refreshEvery,
+		KubeEvery:         kubeEvery,
+		KubeContext:       m.cfg.Context,
+		Namespace:         m.cfg.Namespace,
+		Cluster:           m.cfg.Cluster,
+		BackupSelected:    m.backupSel,
+		BackupNotice:      m.backupNotice,
+		BackupBusy:        m.backupBusy,
+		SwitchoverNotice:  m.switchoverNotice,
+		SwitchoverBusy:    m.switchoverBusy,
+		SwitchoverPending: m.switchoverPending,
 	}
+	if m.backupConfirm != nil {
+		ctx.BackupConfirmKind = m.backupConfirm.kind
+		ctx.BackupConfirmName = m.backupConfirm.name
+		ctx.BackupConfirmMeth = m.backupConfirm.method
+		ctx.BackupConfirmPlug = m.backupConfirm.plugin
+		ctx.BackupConfirmPhase = m.backupConfirm.phase
+	}
+	if m.switchoverConfirm != nil {
+		ctx.SwitchoverConfirmPrimary = m.switchoverConfirm.primary
+		ctx.SwitchoverConfirmTarget = m.switchoverConfirm.target
+	}
+	return ctx
 }

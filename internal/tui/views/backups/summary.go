@@ -3,10 +3,66 @@ package backups
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"postgres-monitor/internal/monitor"
 	"postgres-monitor/internal/tui/views/shared"
 )
+
+// OverviewLines returns the Overview tab's backup status: one scannable row
+// for a completed, running, or failed backup, or a short recovery block while
+// the cluster is restoring. Detail stays on the Backups tab.
+func OverviewLines(ctx shared.Context) []string {
+	if monitor.ClusterRecovering(ctx.Data) {
+		if rec := recoverySummaryLines(ctx); len(rec) > 0 {
+			return rec
+		}
+	}
+	if b, ok := monitor.SelectedBackup(ctx.Data.Backups); ok {
+		return []string{overviewBackupLine(ctx, b)}
+	}
+	if len(ctx.Data.Schedules) > 0 {
+		return []string{shared.Muted.Render("○ no backups yet") + "   cron " + ctx.Data.Schedules[0].Spec.Schedule}
+	}
+	return []string{shared.Muted.Render("No backup resources found")}
+}
+
+func overviewBackupLine(ctx shared.Context, b monitor.BackupResource) string {
+	phase := shared.ValueOr(b.Status.Phase, "pending")
+	status := shared.Green.Render("● ")
+	switch {
+	case strings.EqualFold(phase, "failed"):
+		status = shared.Red.Render("! ")
+	case !strings.EqualFold(phase, "completed"):
+		status = shared.Amber.Render("◷ ")
+	}
+	parts := []string{status + phase, shared.Bright.Render(b.Metadata.Name)}
+	if monitor.ActiveBackup(b) {
+		parts = append(parts, shared.Duration(time.Since(monitor.BackupStart(b)))+" elapsed")
+		if p := ctx.Data.BackupProgress; p.Backup == b.Metadata.Name && p.ReadBytes > 0 {
+			parts = append(parts, shared.BytesHuman(p.ReadBytes)+" read")
+		}
+		if pod := b.Status.InstanceID.PodName; pod != "" {
+			parts = append(parts, "on "+pod)
+		}
+	} else {
+		when := b.Metadata.CreationTimestamp
+		if !b.Status.StoppedAt.IsZero() {
+			when = b.Status.StoppedAt
+		}
+		parts = append(parts, shared.Relative(when))
+		if pod := b.Status.InstanceID.PodName; pod != "" {
+			parts = append(parts, "on "+pod)
+		}
+		if b.Status.Error != "" {
+			parts = append(parts, shared.Red.Render(shared.Truncate(b.Status.Error, 40)))
+		}
+	}
+	if len(ctx.Data.Schedules) > 0 {
+		parts = append(parts, "cron "+ctx.Data.Schedules[0].Spec.Schedule)
+	}
+	return strings.Join(parts, "   ")
+}
 
 // SummaryLines returns the compact backup summary shown by the Overview tab.
 func SummaryLines(ctx shared.Context) []string {
