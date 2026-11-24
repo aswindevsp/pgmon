@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 // Relative renders a coarse age for a timestamp.

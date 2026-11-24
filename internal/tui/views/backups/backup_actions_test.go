@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 func actionCtx() shared.Context {

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 func TestBackupKeysOpenConfirms(t *testing.T) {

@@ -1,4 +1,4 @@
-# pgwatch
+# pgmon
 
 A terminal monitoring dashboard for CloudNativePG clusters with backup
 actions in the Backups tab and primary switchover on Overview and Pods.
@@ -11,7 +11,7 @@ fixed PostgreSQL monitoring query in the selected primary pod.
 go run .
 ```
 
-By default, pgwatch uses your current `kubectl` context and discovers CNPG
+By default, pgmon uses your current `kubectl` context and discovers CNPG
 clusters across all namespaces. If there is one cluster, it opens automatically.
 If there are multiple clusters, use ↑/↓ or Tab to select one and Enter to open it.
 The selector includes namespaces so clusters with the same name are distinguishable.

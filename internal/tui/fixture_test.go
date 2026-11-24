@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 func fixture(t *testing.T, replicas int) model {

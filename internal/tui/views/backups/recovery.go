@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 func recoveryLines(ctx shared.Context) []string {

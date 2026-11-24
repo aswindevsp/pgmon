@@ -6,9 +6,9 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/backups"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/backups"
+	"pgmon/internal/tui/views/shared"
 )
 
 // minCardWidth is the narrowest instance card that can still show a CPU and

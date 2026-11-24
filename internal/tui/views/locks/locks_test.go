@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 func lockFixture() shared.Context {

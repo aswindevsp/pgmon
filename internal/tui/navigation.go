@@ -3,8 +3,8 @@ package tui
 import (
 	"strings"
 
-	"postgres-monitor/internal/tui/views/pods"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/tui/views/pods"
+	"pgmon/internal/tui/views/shared"
 )
 
 func (m model) viewportSize() (int, int, int) {

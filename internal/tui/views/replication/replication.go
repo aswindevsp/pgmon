@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 // Render presents only measurements from the current primary.

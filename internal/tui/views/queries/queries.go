@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/locks"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/locks"
+	"pgmon/internal/tui/views/shared"
 )
 
 func filteredQueries(ctx shared.Context) []monitor.QueryStat {

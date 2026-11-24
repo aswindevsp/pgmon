@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 func switchoverCtx(t *testing.T) Context {

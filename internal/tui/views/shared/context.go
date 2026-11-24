@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 // Context is the read-only input assembled by the application model for each

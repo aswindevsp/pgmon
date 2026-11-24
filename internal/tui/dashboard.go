@@ -5,14 +5,14 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/backups"
-	"postgres-monitor/internal/tui/views/locks"
-	"postgres-monitor/internal/tui/views/overview"
-	"postgres-monitor/internal/tui/views/pods"
-	"postgres-monitor/internal/tui/views/queries"
-	"postgres-monitor/internal/tui/views/replication"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/backups"
+	"pgmon/internal/tui/views/locks"
+	"pgmon/internal/tui/views/overview"
+	"pgmon/internal/tui/views/pods"
+	"pgmon/internal/tui/views/queries"
+	"pgmon/internal/tui/views/replication"
+	"pgmon/internal/tui/views/shared"
 )
 
 func (m model) View() string {

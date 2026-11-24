@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 // OverviewLines returns the Overview tab's backup status: one scannable row

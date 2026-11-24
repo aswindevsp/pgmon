@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 func TestViewportBounds(t *testing.T) {

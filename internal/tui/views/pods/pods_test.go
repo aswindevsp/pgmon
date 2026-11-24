@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 func fixture(t *testing.T, replicas int) shared.Context {

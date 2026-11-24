@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/tui/views/shared"
 )
 
 func TestNavigationRevealsPanelsAndSelectedPods(t *testing.T) {

@@ -3,7 +3,7 @@ package shared
 import (
 	"strings"
 
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 )
 
 // NodeName reports the Kubernetes node a pod runs on.

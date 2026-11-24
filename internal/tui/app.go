@@ -5,8 +5,8 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 const (

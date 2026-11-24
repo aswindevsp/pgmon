@@ -3,7 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"postgres-monitor/internal/monitor"
+	"pgmon/internal/monitor"
 	"reflect"
 	"strings"
 	"testing"

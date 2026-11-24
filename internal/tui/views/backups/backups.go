@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 // Render draws the Backups tab using only information reported by CNPG and

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui"
 )
 
 func main() {
@@ -16,7 +16,7 @@ func main() {
 	flag.StringVar(&cfg.Cluster, "cluster", "", "CloudNativePG cluster name (default: discover and select)")
 	flag.Parse()
 	if err := tui.Run(cfg); err != nil {
-		fmt.Fprintln(os.Stderr, "pgwatch:", err)
+		fmt.Fprintln(os.Stderr, "pgmon:", err)
 		os.Exit(1)
 	}
 }

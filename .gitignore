@@ -1,4 +1,4 @@
-/postgres-monitor
+/pgmon
 /bin/
 *.exe
 .DS_Store

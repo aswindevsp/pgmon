@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"postgres-monitor/internal/monitor"
-	"postgres-monitor/internal/tui/views/shared"
+	"pgmon/internal/monitor"
+	"pgmon/internal/tui/views/shared"
 )
 
 type discoveryModel struct {
@@ -83,7 +83,7 @@ func (m discoveryModel) View() string {
 		h = 24
 	}
 	if w < 32 || h < 10 {
-		return shared.FitLine("pgwatch · enlarge terminal to 32×10", w)
+		return shared.FitLine("pgmon · enlarge terminal to 32×10", w)
 	}
 	width := w - 2
 	scope := "all namespaces"

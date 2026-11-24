@@ -1,4 +1,4 @@
-module postgres-monitor
+module pgmon
 
 go 1.24.0
 

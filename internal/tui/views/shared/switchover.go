@@ -1,6 +1,6 @@
 package shared
 
-import "postgres-monitor/internal/monitor"
+import "pgmon/internal/monitor"
 
 // SwitchoverActionLines is the compact status shown on Overview and Pods.
 func SwitchoverActionLines(ctx Context, width int) []string {
