@@ -466,8 +466,11 @@ func podDetails(ctx shared.Context) []string {
 		lines = append(lines, fmt.Sprintf("PostgreSQL %s · %d connected WAL senders", ctx.Data.Sql.Version, len(ctx.Data.Sql.Replication)))
 	} else if !n.Primary {
 		if p, ok := ctx.Data.ReplayProgress[n.Name]; ok {
-			lines = append(lines, "WAL replay  "+shared.WALReplaySummary(ctx, p),
-				shared.Muted.Render("Live position is the instance's control-file recovery position, read read-only; the primary cannot observe this phase."))
+			lines = append(lines, "WAL replay  "+shared.WALReplaySummary(ctx, p))
+			if meter := shared.WALReplayMeterLine(ctx, p, 64); meter != "" {
+				lines = append(lines, "  "+meter)
+			}
+			lines = append(lines, shared.Muted.Render("Live position is the instance's control-file recovery position, read read-only; the primary cannot observe this phase."))
 		} else {
 			lines = append(lines, shared.Muted.Render("No current replication measurement for this pod."))
 		}

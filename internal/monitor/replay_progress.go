@@ -101,7 +101,9 @@ func ParseBackupManifestWALRanges(out []byte) (start, end uint64, timeline int, 
 }
 
 // ReplayCandidates returns the pods whose archive WAL replay should be probed:
-// running, not yet ready instances with no WAL sender and no active base copy.
+// running instances with no WAL sender and no active base copy. Ready pods
+// are included: CNPG can report Ready while a replica is still replaying WAL
+// from the archive and has not yet connected to the primary.
 func ReplayCandidates(s Snapshot) []PodResource {
 	joins := ReplicaJoins(s, true)
 	senders := make(map[string]bool, len(s.Sql.Replication))
@@ -124,14 +126,7 @@ func ReplayCandidates(s Snapshot) []PodResource {
 		if ownedByJob || pod.Status.Phase != "Running" || len(pod.Status.ContainerStatuses) == 0 {
 			continue
 		}
-		allReady := true
-		for _, c := range pod.Status.ContainerStatuses {
-			if !c.Ready {
-				allReady = false
-				break
-			}
-		}
-		if allReady || senders[name] {
+		if senders[name] {
 			continue
 		}
 		baseCopy := false

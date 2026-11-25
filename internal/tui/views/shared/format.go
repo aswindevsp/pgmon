@@ -199,6 +199,84 @@ func WALReplayBehind(ctx Context, p monitor.WALReplayProgress) (int64, bool) {
 	return int64(remaining), true
 }
 
+// WALReplayCatchup is progress from the backup start toward the replica's
+// catch-up goal: the primary's current WAL when that is ahead of the backup
+// end, otherwise the backup end that marks the first consistent recovery state.
+type WALReplayCatchup struct {
+	Fraction    float64
+	HasFraction bool
+	Remaining   uint64
+	Target      uint64
+	ToPrimary   bool
+	Reached     bool
+	OK          bool
+}
+
+// WALReplayCatchupProgress computes the catch-up meter. A percentage needs a
+// backup start below the target; remaining bytes are still reported without one.
+func WALReplayCatchupProgress(ctx Context, p monitor.WALReplayProgress) WALReplayCatchup {
+	target, toPrimary := replayCatchupTarget(ctx, p)
+	if target == 0 {
+		return WALReplayCatchup{}
+	}
+	live := WALReplayLivePosition(p)
+	out := WALReplayCatchup{Target: target, ToPrimary: toPrimary, OK: true}
+	if live >= target {
+		out.Fraction, out.HasFraction, out.Reached = 1, true, true
+		return out
+	}
+	out.Remaining = target - live
+	if p.Start > 0 && p.Start < target {
+		fraction := (float64(live) - float64(p.Start)) / float64(target-p.Start)
+		out.Fraction = math.Min(1, math.Max(0, fraction))
+		out.HasFraction = true
+	}
+	return out
+}
+
+func replayCatchupTarget(ctx Context, p monitor.WALReplayProgress) (uint64, bool) {
+	timelineOK := p.Timeline == 0 || ctx.Data.Sql.TimelineID == 0 || p.Timeline == ctx.Data.Sql.TimelineID
+	if timelineOK {
+		if primary, ok := monitor.ParseLSNBytes(ctx.Data.Sql.CurrentWALLSN); ok && primary > p.Target {
+			return primary, true
+		}
+	}
+	if p.Target == 0 {
+		return 0, false
+	}
+	if p.Timeline > 0 && ctx.Data.Sql.TimelineID > 0 && p.Timeline != ctx.Data.Sql.TimelineID {
+		return 0, false
+	}
+	return p.Target, false
+}
+
+// WALReplayMeterLine is the shared catch-up bar used on Overview, Replication,
+// and Pods. In-progress fill always leaves an empty end cell and stays under
+// 100%; only a reached target fills the bar.
+func WALReplayMeterLine(ctx Context, p monitor.WALReplayProgress, width int) string {
+	c := WALReplayCatchupProgress(ctx, p)
+	if !c.OK || (!c.HasFraction && !c.Reached) {
+		return ""
+	}
+	barWidth := max(8, min(32, width-18))
+	if c.Reached {
+		label := "100% · backup end reached"
+		if c.ToPrimary {
+			label = "100% · caught up with primary"
+		}
+		return Meter(1, barWidth) + "  " + Green.Render(label)
+	}
+	barFraction := math.Min(c.Fraction, float64(barWidth-1)/float64(barWidth))
+	return ColoredMeter(barFraction, barWidth, Amber) + fmt.Sprintf("  ~%.1f%%", math.Min(99.9, c.Fraction*100))
+}
+
+func walReplayRemainingLabel(c WALReplayCatchup) string {
+	if c.ToPrimary {
+		return "~" + BytesHumanU(c.Remaining) + " behind primary"
+	}
+	return "~" + BytesHumanU(c.Remaining) + " to consistency"
+}
+
 // DurationETA renders a coarse elapsed or remaining label: 42s, 12m, 3h05m, 2d04h.
 func DurationETA(d time.Duration) string {
 	if d < time.Minute {
@@ -226,11 +304,15 @@ func WALReplayETA(p monitor.WALReplayProgress, behind int64) string {
 // WALReplayIdle reports how long the control-file live cursor has stood still.
 // A healthy replay moves it every sample, so more than five minutes without
 // movement is a genuine stall rather than restartpoint granularity.
-func WALReplayIdle(p monitor.WALReplayProgress) (time.Duration, bool) {
+func WALReplayIdle(ctx Context, p monitor.WALReplayProgress) (time.Duration, bool) {
 	if p.LiveAt.IsZero() {
 		return 0, false
 	}
-	if p.Target > 0 && p.Live >= p.Target {
+	c := WALReplayCatchupProgress(ctx, p)
+	if c.OK && c.Reached {
+		return 0, false
+	}
+	if !c.ToPrimary && p.Target > 0 && p.Live >= p.Target {
 		return 0, false
 	}
 	idle := time.Since(p.LiveAt)
@@ -240,12 +322,27 @@ func WALReplayIdle(p monitor.WALReplayProgress) (time.Duration, bool) {
 	return idle, true
 }
 
+func walReplayRemaining(ctx Context, p monitor.WALReplayProgress) (int64, bool, string) {
+	if c := WALReplayCatchupProgress(ctx, p); c.OK {
+		remaining := int64(c.Remaining)
+		if c.Remaining > uint64(math.MaxInt64) {
+			remaining = math.MaxInt64
+		}
+		return remaining, true, walReplayRemainingLabel(c)
+	}
+	behind, ok := WALReplayBehind(ctx, p)
+	if !ok {
+		return 0, false, ""
+	}
+	return behind, true, "~" + BytesHumanU(uint64(behind)) + " to consistency"
+}
+
 // WALReplayCompact is the one-line archive replay state for topology links.
 func WALReplayCompact(ctx Context, p monitor.WALReplayProgress) string {
 	parts := []string{"catching up"}
-	behind, ok := WALReplayBehind(ctx, p)
+	behind, ok, label := walReplayRemaining(ctx, p)
 	if ok {
-		parts = append(parts, "~"+BytesHumanU(uint64(behind))+" to consistency")
+		parts = append(parts, label)
 	} else {
 		parts = append(parts, "replaying WAL from archive")
 	}
@@ -264,9 +361,9 @@ func WALReplaySummary(ctx Context, p monitor.WALReplayProgress) string {
 	if position := WALReplayLivePosition(p); position > 0 {
 		parts = append(parts, "at "+LSNHex(position))
 	}
-	behind, ok := WALReplayBehind(ctx, p)
+	behind, ok, label := walReplayRemaining(ctx, p)
 	if ok {
-		parts = append(parts, "~"+BytesHumanU(uint64(behind))+" to consistency")
+		parts = append(parts, label)
 	}
 	if p.HasRate {
 		parts = append(parts, Rate(p.RateBytesPerSec))
@@ -274,7 +371,7 @@ func WALReplaySummary(ctx Context, p monitor.WALReplayProgress) string {
 	if eta := WALReplayETA(p, behind); eta != "" {
 		parts = append(parts, eta)
 	}
-	if idle, ok := WALReplayIdle(p); ok {
+	if idle, ok := WALReplayIdle(ctx, p); ok {
 		parts = append(parts, "no WAL restored for "+DurationETA(idle))
 	}
 	if p.Restarts > 0 {

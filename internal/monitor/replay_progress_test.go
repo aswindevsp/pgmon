@@ -107,7 +107,7 @@ func TestReplayCandidatesFiltersInstancesUnderArchiveReplay(t *testing.T) {
 	for _, p := range candidates {
 		got = append(got, p.Metadata.Name)
 	}
-	want := []string{"orders-db-areplay", "orders-db-zreplay"}
+	want := []string{"orders-db-areplay", "orders-db-ready", "orders-db-zreplay"}
 	if len(got) != len(want) {
 		t.Fatalf("candidates = %v, want %v", got, want)
 	}

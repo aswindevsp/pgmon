@@ -128,7 +128,22 @@ func TestReplicationDashboardShowsArchiveReplay(t *testing.T) {
 	if !strings.Contains(view, "replaying WAL from archive") || strings.Contains(view, "512.0 KiB to consistency") {
 		t.Fatalf("timeline mismatch should hide the consistency estimate:\n%s", view)
 	}
+	// Once the primary is ahead of the backup end, the bar tracks catch-up to it.
+	ctx.Data.Sql.CurrentWALLSN = "0/00200000"
+	ctx.Data.ReplayProgress["orders-db-3"] = monitor.WALReplayProgress{
+		Pod: "orders-db-3", State: "in archive recovery", Timeline: 4,
+		Position: 512 << 10, Start: 256 << 10, Target: 1024 << 10,
+		Restarts: 1, RateBytesPerSec: 55.3 * 1024 * 1024, HasRate: true,
+	}
+	view = ansi.Strip(Render(ctx, 140))
+	if !strings.Contains(view, "behind primary") {
+		t.Fatalf("primary catch-up should name the primary:\n%s", view)
+	}
+	if strings.Contains(view, "100%") {
+		t.Fatalf("replica still behind primary should not show 100%%:\n%s", view)
+	}
 	// Reaching the backup end fills the meter and labels it explicitly.
+	ctx.Data.Sql.CurrentWALLSN = "0/100000"
 	ctx.Data.ReplayProgress["orders-db-3"] = monitor.WALReplayProgress{
 		Pod: "orders-db-3", State: "in archive recovery", Timeline: 4,
 		Position: 1024 << 10, Live: 1024 << 10, Start: 256 << 10, Target: 1024 << 10,

@@ -190,6 +190,29 @@ func TestClusterHealthShowsSwitchover(t *testing.T) {
 	}
 }
 
+func TestOverviewShowsWALCatchupBar(t *testing.T) {
+	ctx := sampleCluster(t)
+	ctx.Data.Sql.Replication = ctx.Data.Sql.Replication[:1]
+	ctx.Data.Sql.CurrentWALLSN = "0/00200000"
+	ctx.Data.Sql.TimelineID = 33
+	ctx.Data.ReplayProgress = map[string]monitor.WALReplayProgress{
+		"cnpg-cluster-15": {
+			Pod: "cnpg-cluster-15", State: "in archive recovery", Timeline: 33,
+			Position: 512 << 10, Start: 256 << 10, Target: 1024 << 10,
+			RateBytesPerSec: 55.3 * 1024 * 1024, HasRate: true,
+		},
+	}
+	view := ansi.Strip(Render(ctx, 140))
+	for _, want := range []string{"cnpg-cluster-15", "WAL", "~", "%", "catching up"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("overview missing catch-up %q:\n%s", want, view)
+		}
+	}
+	if !strings.Contains(view, "█") || !strings.Contains(view, "░") {
+		t.Fatalf("overview missing catch-up meter:\n%s", view)
+	}
+}
+
 func TestOverviewShowsReplicaCopySpeed(t *testing.T) {
 	ctx := shared.Context{Started: true, SQLLive: true}
 	ctx.Data.Cluster.Metadata.Name = "orders-db"

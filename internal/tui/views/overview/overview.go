@@ -133,6 +133,11 @@ func instanceCardLines(ctx shared.Context, n shared.Node, width int, selected bo
 		instanceSignalLine(ctx, n, inner),
 	}
 	lines = append(lines, shared.ResourceLines(ctx, n, inner)...)
+	if p, ok := ctx.Data.ReplayProgress[n.Name]; ok {
+		if meter := shared.WALReplayMeterLine(ctx, p, inner); meter != "" {
+			lines = append(lines, shared.Muted.Render("WAL ")+meter)
+		}
+	}
 	for i := range lines {
 		lines[i] = shared.FitLine(lines[i], inner)
 	}

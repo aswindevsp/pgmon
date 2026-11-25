@@ -34,11 +34,12 @@ session, even if you change your current kubectl context in another terminal.
 The reference-style dark terminal dashboard has six tabs:
 
 1. **Overview** — compact instance cards (role, readiness, CPU/memory, replica
-   lag), connection/TPS/cache load, WAL and replica vitals, ranked attention,
-   and a single-line backup status.
+   lag, WAL catch-up bar), connection/TPS/cache load, WAL and replica vitals,
+   ranked attention, and a single-line backup status.
 2. **Replication** — replica initialization with live physical base copy progress
-   and measured transfer speed, sent/write/flush/replay WAL positions, byte backlog,
-   recent backlog trends, and replication slot retention.
+   and measured transfer speed, a WAL catch-up progress bar for archive replay,
+   sent/write/flush/replay WAL positions, byte backlog, recent backlog trends,
+   and replication slot retention.
 3. **Backups** — running and queued backups, which instance pod ran each backup,
    process-read progress estimates, the last five backups, reported recovery
    point, schedules, and WAL archiver statistics.
@@ -160,15 +161,18 @@ Replica initialization progress comes from the primary's
 `pg_stat_progress_basebackup` view. Copy speed is the byte difference between
 two successful samples from the same process divided by elapsed time; it appears
 after the second sample and resets when the join process changes. After the base
-copy, while the new instance replays WAL from the archive before its first
-consistent recovery state, the primary cannot observe it. Through read-only
-`kubectl exec`, the monitor samples the starting replica every five seconds:
+copy, while the new instance replays WAL from the archive, the primary cannot
+observe it until it connects as a standby. Ready pods without a WAL sender are
+still sampled: CNPG can report Ready during archive recovery. Through read-only
+`kubectl exec`, the monitor samples the replica every five seconds:
 the control file's minimum recovery ending location is the live flush cursor,
 anchored by the restartpoint location, and the backup manifest fixes the
-consistency target (the backup end). `pg_wal` is not used: CNPG's parallel
-restore keeps prefetched segments there ahead of replay, so its newest file
-would badly overstate progress. The dashboard shows the live position,
-remaining bytes, a measured rate, and an ETA derived from it. The rate is
+consistency target (the backup end). When the primary's current WAL is ahead of
+that, the catch-up bar uses the primary as the goal. `pg_wal` is not used: CNPG's
+parallel restore keeps prefetched segments there ahead of replay, so its newest
+file would badly overstate progress. Overview instance cards, Replication, and
+Pods show a progress bar with the live position, remaining bytes, a measured
+rate, and an ETA derived from it. The rate is
 carried across container restarts and dropped after about 20 minutes without
 movement. If the live cursor has not moved for over five minutes, the summary
 says so, distinguishing a stalled archive fetch from slow replay.

@@ -50,19 +50,8 @@ func replayProgressLines(ctx shared.Context, width int) []string {
 	lines := make([]string, 0, 2*len(entries)+1)
 	for _, p := range entries {
 		lines = append(lines, shared.Bright.Bold(true).Render(p.Pod)+"  "+shared.WALReplaySummary(ctx, p))
-		if p.Start > 0 && p.Target > 0 && p.Target > p.Start {
-			live := shared.WALReplayLivePosition(p)
-			fraction := (float64(live) - float64(p.Start)) / float64(p.Target-p.Start)
-			fraction = math.Min(1, math.Max(0, fraction))
-			barWidth := max(8, min(32, width-8))
-			if live >= p.Target {
-				lines = append(lines, "  "+shared.Meter(1, barWidth)+"  "+shared.Green.Render("100% · backup end reached"))
-				continue
-			}
-			// While replaying, the bar always keeps an empty end cell and the
-			// percentage stays below 100: only the reached target fills it.
-			barFraction := math.Min(fraction, float64(barWidth-1)/float64(barWidth))
-			lines = append(lines, "  "+shared.Meter(barFraction, barWidth)+fmt.Sprintf("  ~%.1f%%", math.Min(99.9, fraction*100)))
+		if meter := shared.WALReplayMeterLine(ctx, p, width); meter != "" {
+			lines = append(lines, "  "+meter)
 		}
 	}
 	lines = append(lines,

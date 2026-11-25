@@ -85,27 +85,33 @@ func TestDurationETA(t *testing.T) {
 }
 
 func TestWALReplayIdle(t *testing.T) {
-	p := replayPod()
+	ctx, p := replayContext(), replayPod()
 	p.Live = p.Position
-	if _, ok := WALReplayIdle(p); ok {
+	if _, ok := WALReplayIdle(ctx, p); ok {
 		t.Fatal("a missing live-cursor sample must not report idle")
 	}
 	p.LiveAt = time.Now().Add(-4*time.Minute - 59*time.Second)
-	if _, ok := WALReplayIdle(p); ok {
+	if _, ok := WALReplayIdle(ctx, p); ok {
 		t.Fatal("4m59s without a segment must not report idle")
 	}
 	p.LiveAt = time.Now().Add(-5*time.Minute - time.Second)
-	if idle, ok := WALReplayIdle(p); !ok || idle < 5*time.Minute {
+	if idle, ok := WALReplayIdle(ctx, p); !ok || idle < 5*time.Minute {
 		t.Fatalf("5m01s without a segment = %s, %v; want idle", idle, ok)
 	}
 	p.Live = p.Target
-	if _, ok := WALReplayIdle(p); ok {
+	if _, ok := WALReplayIdle(ctx, p); ok {
 		t.Fatal("a replica at its consistency target must not report idle")
 	}
 	p.Live = p.Position
 	p.Target = 0
-	if idle, ok := WALReplayIdle(p); !ok || idle < 5*time.Minute {
+	if idle, ok := WALReplayIdle(ctx, p); !ok || idle < 5*time.Minute {
 		t.Fatalf("unknown target should still report idle: %s, %v", idle, ok)
+	}
+	p.Target = 1024 << 10
+	p.Live = p.Target
+	ctx.Data.Sql.CurrentWALLSN = "0/00200000"
+	if idle, ok := WALReplayIdle(ctx, p); !ok || idle < 5*time.Minute {
+		t.Fatalf("stalled past backup end but behind primary = %s, %v; want idle", idle, ok)
 	}
 }
 
@@ -118,6 +124,44 @@ func TestWALReplaySummaryReportsIdleLive(t *testing.T) {
 	}
 	if got := WALReplayCompact(ctx, p); strings.Contains(got, "no WAL restored") {
 		t.Fatalf("compact should stay terse: %q", got)
+	}
+}
+
+func TestWALReplayCatchupProgressUsesPrimaryWhenAhead(t *testing.T) {
+	ctx, p := replayContext(), replayPod()
+	// Backup end 1 MiB, live 512 KiB, start 256 KiB → 33.3% of consistency.
+	c := WALReplayCatchupProgress(ctx, p)
+	if !c.OK || c.ToPrimary || !c.HasFraction || c.Reached {
+		t.Fatalf("backup-end catchup = %+v", c)
+	}
+	if c.Remaining != 512<<10 {
+		t.Fatalf("remaining = %d, want 512 KiB", c.Remaining)
+	}
+	if got := WALReplayMeterLine(ctx, p, 40); !strings.Contains(got, "~33.3%") {
+		t.Fatalf("backup-end meter = %q", got)
+	}
+	// Primary current WAL past the backup end is the catch-up goal.
+	ctx.Data.Sql.CurrentWALLSN = "0/00200000"
+	c = WALReplayCatchupProgress(ctx, p)
+	if !c.OK || !c.ToPrimary || !c.HasFraction || c.Reached {
+		t.Fatalf("primary catchup = %+v", c)
+	}
+	if c.Remaining != 0x00200000-(512<<10) {
+		t.Fatalf("remaining behind primary = %d", c.Remaining)
+	}
+	if got := WALReplayCompact(ctx, p); !strings.Contains(got, "behind primary") {
+		t.Fatalf("compact should name the primary: %q", got)
+	}
+	if got := WALReplayMeterLine(ctx, p, 40); !strings.Contains(got, "~") || strings.Contains(got, "100%") {
+		t.Fatalf("in-progress primary meter = %q", got)
+	}
+	p.Position, p.Live = 0x00200000, 0x00200000
+	c = WALReplayCatchupProgress(ctx, p)
+	if !c.Reached || c.Fraction != 1 {
+		t.Fatalf("caught up = %+v", c)
+	}
+	if got := WALReplayMeterLine(ctx, p, 40); !strings.Contains(got, "caught up with primary") {
+		t.Fatalf("reached primary meter = %q", got)
 	}
 }
 
